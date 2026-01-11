@@ -477,7 +477,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **Issues**: [GitHub Issues](https://github.com/your-org/higun/issues)
 - **Documentation**: Check the `docs/` directory for detailed guides
-- **Email**: support@yourdomain.com
 
 ## 🗺️ Roadmap
 
