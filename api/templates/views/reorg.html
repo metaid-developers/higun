@@ -1,0 +1,41 @@
+{{template "layouts/header.html" .}}
+<h2>Reorg Logs</h2>
+{{if .logs}}
+<table>
+    <thead>
+        <tr>
+            <th scope="col">Height</th>
+            <th scope="col">EndHeight</th>
+            <th scope="col">ReorgSize</th>
+            <th scope="col">BlockHash</th>
+            <th scope="col">NewBlockHash</th>
+            <th scope="col">Timestamp</th>
+            <th scope="col">Status</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .logs}}
+        <tr>
+            <th scope="row">{{ .Height }}</th>
+            <th scope="row">{{ .EndHeight }}</th>
+            <th scope="row">{{ .ReorgSize }}</th>
+            <td style="max-width: 150px; "><span data-tooltip="{{ .BlockHash }}">{{ .BlockHash | short }}</span></td>
+            <td style="max-width: 150px; "><span data-tooltip="{{ .NewBlockHash }}">{{ .NewBlockHash | short }}</span>
+            </td>
+            <td>{{ .Timestamp | date "2006-01-02 15:04:05" }}</td>
+            <td>{{ .Status }}</td>
+        </tr>
+        {{end}}
+    </tbody>
+
+</table>
+<div class="pagination">
+    {{if gt .CurrentPage 1}}
+    <a href="?page={{sub .CurrentPage 1}}&limit={{.Limit}}" class="button" style="margin-right: 100px;">Prev</a>
+    {{end}}
+    <a href="?page={{add .CurrentPage 1}}&limit={{.Limit}}" class="button">Next</a>
+</div>
+{{else}}
+<p>Null</p>
+{{end}}
+{{ template "footer.html" . }}

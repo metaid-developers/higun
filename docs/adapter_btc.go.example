@@ -1,0 +1,256 @@
+package blockchain
+
+import (
+	"bytes"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"log"
+	"strconv"
+	"time"
+
+	"github.com/btcsuite/btcd/btcjson"
+	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/rpcclient"
+	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/wire"
+	"github.com/metaid/utxo_indexer/config"
+	"github.com/metaid/utxo_indexer/indexer"
+)
+
+// BTCAdapter BTC 链适配器
+type BTCAdapter struct {
+	rpcClient *rpcclient.Client
+	cfg       *config.Config
+	params    *chaincfg.Params
+}
+
+// NewBTCAdapter 创建 BTC 适配器
+func NewBTCAdapter(cfg *config.Config) (*BTCAdapter, error) {
+	connCfg := &rpcclient.ConnConfig{
+		Host:         fmt.Sprintf("%s:%s", cfg.RPC.Host, cfg.RPC.Port),
+		User:         cfg.RPC.User,
+		Pass:         cfg.RPC.Password,
+		HTTPPostMode: true,
+		DisableTLS:   true,
+	}
+
+	client, err := rpcclient.New(connCfg, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create BTC RPC client: %w", err)
+	}
+
+	params, err := cfg.GetChainParams()
+	if err != nil {
+		return nil, err
+	}
+
+	return &BTCAdapter{
+		rpcClient: client,
+		cfg:       cfg,
+		params:    params,
+	}, nil
+}
+
+// Connect 连接到 BTC 节点
+func (a *BTCAdapter) Connect() error {
+	_, err := a.rpcClient.GetBlockCount()
+	if err != nil {
+		return fmt.Errorf("failed to connect to BTC node: %w", err)
+	}
+	log.Println("Connected to BTC node successfully")
+	return nil
+}
+
+// Shutdown 关闭连接
+func (a *BTCAdapter) Shutdown() {
+	a.rpcClient.Shutdown()
+	log.Println("BTC adapter shutdown")
+}
+
+// GetChainName 获取链名称
+func (a *BTCAdapter) GetChainName() string {
+	return "btc"
+}
+
+// GetChainParams 获取链参数
+func (a *BTCAdapter) GetChainParams() *chaincfg.Params {
+	return a.params
+}
+
+// GetBlockCount 获取最新区块高度
+func (a *BTCAdapter) GetBlockCount() (int, error) {
+	count, err := a.rpcClient.GetBlockCount()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get block count: %w", err)
+	}
+	return int(count), nil
+}
+
+// GetBlockHash 获取指定高度的区块哈希
+func (a *BTCAdapter) GetBlockHash(height int64) (string, error) {
+	hash, err := a.rpcClient.GetBlockHash(height)
+	if err != nil {
+		return "", fmt.Errorf("failed to get block hash at height %d: %w", height, err)
+	}
+	return hash.String(), nil
+}
+
+// GetBlockHeader 获取区块头信息
+func (a *BTCAdapter) GetBlockHeader(hash string) (*BlockHeader, error) {
+	h, err := chainhash.NewHashFromStr(hash)
+	if err != nil {
+		return nil, err
+	}
+
+	header, err := a.rpcClient.GetBlockHeader(h)
+	if err != nil {
+		return nil, err
+	}
+
+	return &BlockHeader{
+		Hash:              hash,
+		PreviousBlockHash: header.PrevBlock.String(),
+		Timestamp:         header.Timestamp.Unix(),
+	}, nil
+}
+
+// GetBlock 获取区块数据(核心方法)
+func (a *BTCAdapter) GetBlock(height int64) (*indexer.Block, error) {
+	// 1. 获取区块哈希
+	hashStr, err := a.GetBlockHash(height)
+	if err != nil {
+		return nil, err
+	}
+
+	hash, _ := chainhash.NewHashFromStr(hashStr)
+
+	// 2. 获取原始区块数据
+	resp, err := a.rpcClient.RawRequest("getblock", []json.RawMessage{
+		json.RawMessage(fmt.Sprintf("\"%s\"", hash.String())),
+		json.RawMessage("0"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get raw block: %w", err)
+	}
+
+	var blockHex string
+	if err := json.Unmarshal(resp, &blockHex); err != nil {
+		return nil, err
+	}
+
+	// 3. 解析区块
+	blockBytes, err := hex.DecodeString(blockHex)
+	if err != nil {
+		return nil, err
+	}
+
+	msgBlock := &wire.MsgBlock{}
+	if err := msgBlock.Deserialize(bytes.NewReader(blockBytes)); err != nil {
+		return nil, err
+	}
+
+	// 4. 转换为统一的索引器格式
+	return a.convertToIndexerBlock(msgBlock, int(height), hashStr, msgBlock.Header.Timestamp.Unix())
+}
+
+// GetTransaction 获取单笔交易
+func (a *BTCAdapter) GetTransaction(txid string) (*indexer.Transaction, error) {
+	txHash, err := chainhash.NewHashFromStr(txid)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := a.rpcClient.GetRawTransaction(txHash)
+	if err != nil {
+		return nil, err
+	}
+
+	return a.convertBTCTxToIndexerTx(tx.MsgTx()), nil
+}
+
+// GetRawMempool 获取内存池交易列表
+func (a *BTCAdapter) GetRawMempool() ([]string, error) {
+	hashes, err := a.rpcClient.GetRawMempool()
+	if err != nil {
+		return nil, err
+	}
+
+	txids := make([]string, len(hashes))
+	for i, hash := range hashes {
+		txids[i] = hash.String()
+	}
+	return txids, nil
+}
+
+// FindReorgHeight 查找重组高度
+func (a *BTCAdapter) FindReorgHeight() (int, int) {
+	// BTC 特定的重组检测逻辑
+	// TODO: 实现
+	return 0, 0
+}
+
+// ========== 私有方法:BTC 特定的转换逻辑 ==========
+
+// convertToIndexerBlock 将 BTC 区块转换为统一格式
+func (a *BTCAdapter) convertToIndexerBlock(msgBlock *wire.MsgBlock, height int, blockHash string, blockTime int64) (*indexer.Block, error) {
+	txCount := len(msgBlock.Transactions)
+	
+	block := &indexer.Block{
+		Height:       height,
+		BlockHash:    blockHash,
+		Transactions: make([]*indexer.Transaction, 0, txCount),
+		UtxoData:     make(map[string][]string),
+		IncomeData:   make(map[string][]string),
+		SpendData:    make(map[string][]string),
+	}
+
+	// 转换所有交易
+	for _, tx := range msgBlock.Transactions {
+		indexerTx := a.convertBTCTxToIndexerTx(tx)
+		block.Transactions = append(block.Transactions, indexerTx)
+	}
+
+	return block, nil
+}
+
+// convertBTCTxToIndexerTx 将 BTC 交易转换为统一格式
+func (a *BTCAdapter) convertBTCTxToIndexerTx(tx *wire.MsgTx) *indexer.Transaction {
+	// 转换输入
+	inputs := make([]*indexer.Input, len(tx.TxIn))
+	for i, in := range tx.TxIn {
+		prevTxid := in.PreviousOutPoint.Hash.String()
+		if prevTxid == "0000000000000000000000000000000000000000000000000000000000000000" {
+			prevTxid = "0000000000000000000000000000000000000000000000000000000000000000"
+		}
+		inputs[i] = &indexer.Input{
+			TxPoint: fmt.Sprintf("%s:%d", prevTxid, in.PreviousOutPoint.Index),
+		}
+	}
+
+	// 转换输出
+	outputs := make([]*indexer.Output, len(tx.TxOut))
+	for i, out := range tx.TxOut {
+		address := a.extractAddress(out.PkScript)
+		outputs[i] = &indexer.Output{
+			Address: address,
+			Amount:  strconv.FormatInt(out.Value, 10),
+		}
+	}
+
+	return &indexer.Transaction{
+		ID:      tx.TxHash().String(),
+		Inputs:  inputs,
+		Outputs: outputs,
+	}
+}
+
+// extractAddress 从脚本中提取 BTC 地址
+func (a *BTCAdapter) extractAddress(pkScript []byte) string {
+	_, addrs, _, err := txscript.ExtractPkScriptAddrs(pkScript, a.params)
+	if err == nil && len(addrs) > 0 {
+		return addrs[0].String() // BTC 使用 String() 方法
+	}
+	return "errAddress"
+}

@@ -1,0 +1,28 @@
+# UTXO Indexer Configuration
+chain: "btc"
+network: "regtest" # mainnet/testnet/regtest
+block_info_indexer: false
+data_dir: "/home/momo/data/higun/test"
+backup_dir: "/home/momo/data/higun/backups"
+block_files_dir: "/home/momo/data/higun/blockFiles"
+shard_count: 2
+tx_concurrency: 64 # How many concurrent requests to fetch raw transactions from nodes
+workers: 24
+batch_size: 50000
+mem_utxo_max_count: 14000000 # Memory UTXO cache size (~4.2GB), BlockCache reduced to 20MB for more UTXO cache
+cpu_cores: 1 # 4-core CPU
+memory_gb: 4 # 64GB memory
+high_perf: true # Prefer performance
+api_port: "3001"
+zmq_address:
+  - "tcp://127.0.0.1:28333" # ZeroMQ connection address
+mempool_clean_start_height: 300 # 已废弃: 现在自动判断，仅在同步到最新区块时才清理内存池
+max_tx_per_batch: 30000
+zmq_reconnect_interval: 1
+# Bitcoin RPC Configuration
+rpc:
+  chain: "btc"
+  host: "127.0.0.1"
+  port: "18443"
+  user: "test"
+  password: "test"

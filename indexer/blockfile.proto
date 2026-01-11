@@ -1,0 +1,16 @@
+syntax = "proto3";
+package indexer;
+
+option go_package = "srv/dev_project/metaid/utxo-indexer/indexer;indexer";
+
+message FBlock {
+  int64 height = 1;
+  string block_hash = 2;
+  map<string, StringList> utxo_data = 3;
+  map<string, StringList> income_data = 4;
+  map<string, StringList> spend_data = 5;
+}
+
+message StringList {
+  repeated string items = 1;
+}

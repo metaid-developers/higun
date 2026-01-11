@@ -1,0 +1,43 @@
+package blockchain
+
+import (
+	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/metaid/utxo_indexer/indexer"
+)
+
+// ChainAdapter 链适配器接口 - 所有链必须实现此接口
+type ChainAdapter interface {
+	// 连接管理
+	Connect() error
+	Shutdown()
+	GetChainName() string
+	GetChainParams() *chaincfg.Params
+
+	// 区块链查询
+	GetBlockCount() (int, error)
+	GetBlockHash(height int64) (string, error)
+	GetBlockHeader(hash string) (*BlockHeader, error)
+
+	// 区块数据(核心方法)
+	// 返回已解析为统一格式的区块数据
+	GetBlock(height int64) (*indexer.Block, error)
+
+	// 交易数据
+	GetTransaction(txid string) (*indexer.Transaction, error)
+
+	// 内存池
+	GetRawMempool() ([]string, error)
+	
+	// 区块重组检测
+	FindReorgHeight() (int, int)
+}
+
+// BlockHeader 区块头信息
+type BlockHeader struct {
+	Hash              string
+	Height            int64
+	PreviousBlockHash string
+	NextBlockHash     string
+	Timestamp         int64
+	Confirmations     int64
+}

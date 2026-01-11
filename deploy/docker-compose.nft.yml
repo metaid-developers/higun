@@ -1,0 +1,28 @@
+version: '3.3'
+
+services:
+  nft-utxo-indexer:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.nft
+    container_name: nft-utxo-indexer
+    restart: unless-stopped
+    ports:
+      - "7790:7790"
+    volumes:
+      - ../../pebble_data/data_utxo_nft:/app/data
+    environment:
+      - TZ=Asia/Shanghai
+    command: ["-config", "config_mvc_nft_pro.yaml"]
+    networks:
+      - nft-network
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+
+networks:
+  nft-network:
+    driver: bridge
+

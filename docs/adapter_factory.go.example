@@ -1,0 +1,27 @@
+package blockchain
+
+import (
+	"fmt"
+	"github.com/metaid/utxo_indexer/config"
+)
+
+// NewChainAdapter 适配器工厂 - 根据配置创建对应的链适配器
+func NewChainAdapter(cfg *config.Config) (ChainAdapter, error) {
+	switch cfg.Chain {
+	case config.ChainBTC:
+		return NewBTCAdapter(cfg)
+		
+	case config.ChainMVC:
+		return NewMVCAdapter(cfg)
+		
+	case config.ChainDOGE:
+		return NewDOGEAdapter(cfg)
+		
+	// 添加新链只需在这里添加 case
+	// case config.ChainLTC:
+	//     return NewLTCAdapter(cfg)
+		
+	default:
+		return nil, fmt.Errorf("unsupported chain: %s, supported chains: btc, mvc, doge", cfg.Chain)
+	}
+}

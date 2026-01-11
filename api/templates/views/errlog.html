@@ -1,0 +1,36 @@
+{{template "layouts/header.html" .}}
+<h2>Error Logs</h2>
+{{if .logs}}
+<table>
+    <thead>
+        <tr>
+            <th scope="col">ErrType</th>
+            <th scope="col">Height</th>
+            <th scope="col">BlockHash</th>
+            <th scope="col">Timestamp</th>
+            <th scope="col">ErrorMessage</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .logs}}
+        <tr>
+            <th scope="row">{{ .ErrType }}</th>
+            <th scope="row">{{ .Height }}</th>
+            <td style="max-width: 150px; "><span data-tooltip="{{ .BlockHash }}">{{ .BlockHash | short }}</span></td>
+            <td>{{ .Timestamp | date "2006-01-02 15:04:05" }}</td>
+            <td>{{ .ErrorMessage }}</td>
+        </tr>
+        {{end}}
+    </tbody>
+
+</table>
+<div class="pagination">
+    {{if gt .CurrentPage 1}}
+    <a href="?page={{sub .CurrentPage 1}}&limit={{.Limit}}" class="button" style="margin-right: 100px;">Prev</a>
+    {{end}}
+    <a href="?page={{add .CurrentPage 1}}&limit={{.Limit}}" class="button">Next</a>
+</div>
+{{else}}
+<p>Null</p>
+{{end}}
+{{ template "footer.html" . }}

@@ -1,0 +1,196 @@
+package main
+
+import (
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/metaid/utxo_indexer/blockchain"
+	"github.com/metaid/utxo_indexer/config"
+	"github.com/metaid/utxo_indexer/indexer"
+	"github.com/metaid/utxo_indexer/storage"
+)
+
+func main() {
+	fmt.Println("Starting UTXO Indexer...")
+	
+	// 1. 加载配置
+	cfg, params := initConfig()
+	
+	// 2. 创建链适配器(工厂自动选择)
+	chainAdapter, err := blockchain.NewChainAdapter(cfg)
+	if err != nil {
+		log.Fatalf("Failed to create chain adapter: %v", err)
+	}
+	defer chainAdapter.Shutdown()
+	
+	// 3. 连接到链节点
+	if err := chainAdapter.Connect(); err != nil {
+		log.Fatalf("Failed to connect to chain: %v", err)
+	}
+	log.Printf("✓ Connected to %s chain", chainAdapter.GetChainName())
+	
+	// 4. 初始化存储
+	utxoStore, addressStore, spendStore, metaStore, err := initStorage(cfg, params)
+	if err != nil {
+		log.Fatalf("Failed to initialize storage: %v", err)
+	}
+	defer closeStorage(utxoStore, addressStore, spendStore, metaStore)
+	
+	// 5. 创建索引器(完全不知道链类型)
+	idx := indexer.NewUTXOIndexer(
+		chainAdapter.GetChainParams(),
+		utxoStore,
+		addressStore,
+		metaStore,
+		spendStore,
+	)
+	
+	// 6. 启动 API 服务
+	apiServer := initAPIServer(cfg, idx, chainAdapter)
+	go apiServer.Start(fmt.Sprintf(":%s", cfg.APIPort))
+	log.Printf("✓ API server started on port %s", cfg.APIPort)
+	
+	// 7. 启动区块同步(使用适配器)
+	stopCh := make(chan struct{})
+	go syncBlocks(chainAdapter, idx, 10*time.Second, stopCh)
+	
+	// 8. 等待退出信号
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
+	
+	log.Println("Shutting down...")
+	close(stopCh)
+	time.Sleep(2 * time.Second)
+}
+
+// syncBlocks 区块同步(链无关)
+func syncBlocks(adapter blockchain.ChainAdapter, idx *indexer.UTXOIndexer, 
+	checkInterval time.Duration, stopCh <-chan struct{}) {
+	
+	log.Printf("Starting block sync for %s chain...", adapter.GetChainName())
+	
+	for {
+		select {
+		case <-stopCh:
+			return
+		default:
+		}
+		
+		// 获取当前高度(通过适配器)
+		currentHeight, err := adapter.GetBlockCount()
+		if err != nil {
+			log.Printf("Failed to get block count: %v", err)
+			time.Sleep(checkInterval)
+			continue
+		}
+		
+		// 获取已索引高度
+		lastHeight, err := idx.GetLastIndexedHeight()
+		if err != nil {
+			lastHeight = 0
+		}
+		
+		// 没有新区块
+		if currentHeight <= lastHeight {
+			time.Sleep(checkInterval)
+			continue
+		}
+		
+		log.Printf("Syncing blocks from %d to %d", lastHeight+1, currentHeight)
+		
+		// 同步新区块
+		for height := lastHeight + 1; height <= currentHeight; height++ {
+			// 通过适配器获取区块(已转换为统一格式)
+			block, err := adapter.GetBlock(int64(height))
+			if err != nil {
+				log.Printf("Failed to get block at height %d: %v", height, err)
+				break
+			}
+			
+			// 索引器处理(完全不关心链类型)
+			if err := idx.IndexBlock(block); err != nil {
+				log.Printf("Failed to index block at height %d: %v", height, err)
+				break
+			}
+			
+			if height%100 == 0 {
+				log.Printf("Indexed block %d", height)
+			}
+		}
+		
+		time.Sleep(checkInterval)
+	}
+}
+
+func initConfig() (*config.Config, config.IndexerParams) {
+	cfg, err := config.LoadConfig("config.yaml")
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+	
+	log.Printf("Loaded config for chain: %s", cfg.Chain)
+	
+	params := config.AutoConfigure(config.SystemResources{
+		CPUCores:   cfg.CPUCores,
+		MemoryGB:   cfg.MemoryGB,
+		HighPerf:   cfg.HighPerf,
+		ShardCount: cfg.ShardCount,
+	})
+	
+	return cfg, params
+}
+
+func initStorage(cfg *config.Config, params config.IndexerParams) (
+	*storage.PebbleStore, *storage.PebbleStore, *storage.PebbleStore, *storage.MetaStore, error) {
+	
+	storage.DbInit(params)
+	
+	utxoStore, err := storage.NewPebbleStore(params, cfg.DataDir, storage.StoreTypeUTXO, cfg.ShardCount)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	
+	addressStore, err := storage.NewPebbleStore(params, cfg.DataDir, storage.StoreTypeIncome, cfg.ShardCount)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	
+	spendStore, err := storage.NewPebbleStore(params, cfg.DataDir, storage.StoreTypeSpend, cfg.ShardCount)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	
+	metaStore, err := storage.NewMetaStore(cfg.DataDir)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	
+	return utxoStore, addressStore, spendStore, metaStore, nil
+}
+
+func closeStorage(utxo, address, spend *storage.PebbleStore, meta *storage.MetaStore) {
+	if utxo != nil {
+		utxo.Close()
+	}
+	if address != nil {
+		address.Close()
+	}
+	if spend != nil {
+		spend.Close()
+	}
+	if meta != nil {
+		meta.Close()
+	}
+}
+
+func initAPIServer(cfg *config.Config, idx *indexer.UTXOIndexer, 
+	adapter blockchain.ChainAdapter) *api.Server {
+	// API 服务初始化
+	// ...
+	return nil
+}

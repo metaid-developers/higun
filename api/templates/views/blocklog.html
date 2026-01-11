@@ -1,0 +1,82 @@
+{{template "layouts/header.html" .}}
+<h2>Block Logs</h2>
+{{if .logs}}
+<table>
+    <thead>
+        <tr>
+            <th scope="col">Height</th>
+            <th scope="col">BlockHash</th>
+            <th scope="col">Tx</th>
+            <th scope="col">Address</th>
+            <th scope="col">TxIn(exp/act)</th>
+            <th scope="col">TxOut(exp/act)</th>
+            <th scope="col">CompletionTime</th>
+            <th scope="col">BlockTime</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .logs}}
+        <tr>
+            <th scope="row">{{if eq .Reorg 1}}[R] {{ end }}{{ .Height }}</th>
+            <td style="max-width: 150px;">
+                <span data-tooltip="{{ .BlockHash }}">{{ .BlockHash | short }}</span>
+                <button class="copy-btn" title="Copy BlockHash" data-blockhash="{{ .BlockHash }}"
+                    style="background:none;border:none;cursor:pointer;padding:0;margin-left:6px;">
+                    <!-- 简单复制图标（SVG） -->
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                        <rect x="4" y="4" width="8" height="8" rx="2" stroke="#888" stroke-width="1.5" fill="none" />
+                        <rect x="2" y="2" width="8" height="8" rx="2" stroke="#bbb" stroke-width="1" fill="none" />
+                    </svg>
+                </button>
+            </td>
+            <td>{{ .TxNum }}</td>
+            <td>{{ .AddressNum }}</td>
+            <td>{{ .ExpectedInTxCount }} / {{ .ActualInTxCount }}</td>
+            <td>{{ .ExpectedOutTxCount }} / {{ .ActualOutTxCount }}</td>
+            <td>{{ .CompletionTime | date "2006-01-02 15:04:05" }}</td>
+            <td>{{ .BlockTime | date "2006-01-02 15:04:05" }}</td>
+        </tr>
+        {{end}}
+    </tbody>
+
+</table>
+<div class="pagination">
+    {{if gt .CurrentPage 1}}
+    <a href="?page={{sub .CurrentPage 1}}&limit={{.Limit}}" class="button" style="margin-right: 100px;">Prev</a>
+    {{end}}
+    <a href="?page={{add .CurrentPage 1}}&limit={{.Limit}}" class="button">Next</a>
+</div>
+{{else}}
+<p>Null</p>
+{{end}}
+{{ template "footer.html" . }}
+<script>
+    document.addEventListener('click', function (e) {
+        var btn = e.target.closest('.copy-btn');
+        if (btn) {
+            var hash = btn.getAttribute('data-blockhash');
+            if (hash) {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(hash).then(function () {
+                        window.alert('BlockHash copied!');
+                    }, function () {
+                        window.alert('Copy failed!');
+                    });
+                } else {
+                    // 兼容旧浏览器
+                    var temp = document.createElement('textarea');
+                    temp.value = hash;
+                    document.body.appendChild(temp);
+                    temp.select();
+                    try {
+                        document.execCommand('copy');
+                        window.alert('BlockHash copied!');
+                    } catch (err) {
+                        window.alert('Copy failed!');
+                    }
+                    document.body.removeChild(temp);
+                }
+            }
+        }
+    });
+</script>

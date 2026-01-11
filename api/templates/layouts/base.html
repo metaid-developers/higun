@@ -1,0 +1,42 @@
+{{define "layouts/base.html"}}
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ .title }}</title>
+    <link rel="stylesheet" href="/templates/css/pico.classless.min.css">
+    <style>
+        table {
+            font-size: 0.8rem;
+            /* 调整字体大小 */
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <hgroup>
+            <h1>HIGUN</h1>
+            <p>Hyper Indexer of General UTXO Network.</p>
+        </hgroup>
+        <nav>
+            <ul>
+                <li><a href="/" data-theme-switcher="auto">Index</a></li>
+                <li><a href="/logs" data-theme-switcher="light">Block</a></li>
+                <li><a href="#" data-theme-switcher="dark">Err</a></li>
+            </ul>
+        </nav>
+    </header>
+    <main class="content">
+        {{template "content" .}}
+    </main>
+
+    <footer>
+        <p>&copy; 2025 MetaID</p>
+    </footer>
+</body>
+
+</html>
+{{end}}

@@ -1,0 +1,90 @@
+{{template "layouts/header.html" .}}
+<style>
+    /* Simple card styles */
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 16px;
+        margin: 16px 0;
+    }
+
+    .card {
+        background: #ffffff;
+        border-radius: 8px;
+        padding: 18px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 6px 20px rgba(0, 0, 0, 0.03);
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        min-height: 96px;
+    }
+
+    .card-title {
+        color: #6b7280;
+        /* gray-500 */
+        font-size: 13px;
+        margin-bottom: 8px;
+    }
+
+    .card-value {
+        color: #111827;
+        /* gray-900 */
+        font-size: 28px;
+        font-weight: 700;
+        line-height: 1;
+    }
+
+    .card-sub {
+        color: #9ca3af;
+        font-size: 12px;
+        margin-top: 6px;
+    }
+
+    .header-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+    }
+
+    h2 {
+        margin: 8px 0 0 0;
+        font-weight: 600;
+    }
+</style>
+
+<div class="header-row">
+    <h2>Statistics Overview</h2>
+    <small class="card-sub">Real-time values are not strictly guaranteed — persisted counts are authoritative</small>
+</div>
+
+{{if .data}}
+<div class="stats-grid">
+    <div class="card">
+        <div class="card-title">UTXO Count</div>
+        <div class="card-value">{{ .data.TotalUtxo }}</div>
+        <div class="card-sub">Number of UTXO keys stored</div>
+    </div>
+
+    <div class="card">
+        <div class="card-title">Address Count</div>
+        <div class="card-value">{{ .data.TotalAddress }}</div>
+        <div class="card-sub">Number of indexed addresses</div>
+    </div>
+
+    <div class="card">
+        <div class="card-title">On-chain Height</div>
+        <div class="card-value">{{ .data.BlockLastHeight }}</div>
+        <div class="card-sub">Latest on-chain block height</div>
+    </div>
+
+    <div class="card">
+        <div class="card-title">Local Indexed Height</div>
+        <div class="card-value">{{ .data.LocalLastHeight }}</div>
+        <div class="card-sub">Height indexed locally</div>
+    </div>
+</div>
+{{else}}
+<p>No data available</p>
+{{end}}
+{{ template "footer.html" . }}
