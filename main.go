@@ -206,10 +206,11 @@ func main() {
 }
 func firstSyncCompleted() {
 	//return
-	log.Println("Initial sync completed, starting mempool")
+	log.Println("Initial sync completed, attempting to start mempool")
 	err := ApiServer.RebuildMempool()
 	if err != nil {
-		log.Printf("Failed to rebuild mempool: %v", err)
+		log.Printf("INFO: Mempool functionality disabled - %v", err)
+		log.Println("The indexer will continue running without mempool features")
 		return
 	}
 	err = ApiServer.StartMempoolCore()
@@ -217,7 +218,7 @@ func firstSyncCompleted() {
 		log.Printf("Failed to start mempool core: %v", err)
 		return
 	}
-	log.Println("Mempool core started")
+	log.Println("Mempool core started successfully")
 }
 
 func initConfig() (cfg *config.Config, params config.IndexerParams) {
@@ -296,12 +297,18 @@ func initDb(cfg *config.Config, params config.IndexerParams) (utxoStore *storage
 	if err != nil {
 		log.Fatalf("Failed to get chain parameters: %v", err)
 	}
+	log.Printf("DEBUG: Chain parameters obtained successfully, proceeding to mempool initialization")
 
 	// Create mempool manager, but don't start
 	log.Printf("Initializing mempool manager, ZMQ address: %s, network: %s", cfg.ZMQAddress, cfg.Network)
+	log.Printf("DEBUG: About to call NewMempoolManager with DataDir=%s", cfg.DataDir)
 	mempoolMgr = mempool.NewMempoolManager(cfg.DataDir, utxoStore, chainCfg, cfg.ZMQAddress)
+	log.Printf("DEBUG: NewMempoolManager returned, mempoolMgr is nil: %v", mempoolMgr == nil)
 	if mempoolMgr == nil {
-		log.Printf("Failed to create mempool manager")
+		log.Printf("WARNING: Failed to create mempool manager. The program will continue but mempool functionality will be disabled.")
+		log.Printf("This may be due to insufficient permissions or disk space for mempool database files in: %s", cfg.DataDir+"/mempool_*")
+	} else {
+		log.Printf("Mempool manager initialized successfully")
 	}
 	return
 }
