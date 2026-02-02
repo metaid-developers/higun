@@ -125,13 +125,15 @@ func (idx *UTXOIndexer) HandleReorg(fromHeight, toHeight int64) error {
 		return fmt.Errorf("failed to update indexer reorg: %w", err)
 	}
 	//重建内存池
-	err = idx.mempoolManager.DeleteMempool()
-	if err != nil {
-		return fmt.Errorf("failed to rebuild mempool: %w", err)
-	}
-	err = idx.mempoolManager.StartMempool()
-	if err != nil {
-		return fmt.Errorf("failed to start mempool: %w", err)
+	if idx.mempoolManager != nil {
+		err = idx.mempoolManager.DeleteMempool()
+		if err != nil {
+			return fmt.Errorf("failed to rebuild mempool: %w", err)
+		}
+		err = idx.mempoolManager.StartMempool()
+		if err != nil {
+			return fmt.Errorf("failed to start mempool: %w", err)
+		}
 	}
 
 	IsHandleReorg = false

@@ -761,7 +761,7 @@ func (i *UTXOIndexer) processSpend(block *Block, allBlock *Block, blockTimeStr s
 		}
 		//log.Println(">>>[processSpend] finish update db")
 		// Whether to clean up mempool spend records
-		if blockHeight > CleanedHeight {
+		if blockHeight > CleanedHeight && i.mempoolManager != nil {
 			//log.Printf("Deleting %d mempool spend records for block height %d,CleanHeight:%d", len(batchPoints), blockHeight, CleanedHeight)
 			err := i.mempoolManager.BatchDeleteSpend(deleteKeys)
 			if err != nil {

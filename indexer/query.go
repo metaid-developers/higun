@@ -89,8 +89,14 @@ func (i *UTXOIndexer) GetBalance(address string, dustThreshold int64) (balanceRe
 	balance := income - spend
 	// Convert to BTC unit (1 BTC = 100,000,000 satoshis)
 	btcBalance := float64(balance) / 1e8
-	mempoolIncomeData, mempoolSpendData := i.mempoolManager.GetDataByAddress(address)
-	mempoolIncomeList := getUtxoFromMempoolIncomeMap(mempoolIncomeData)
+
+	// Check if mempool manager is available before using it
+	var mempoolIncomeData, mempoolSpendData map[string]string
+	var mempoolIncomeList []common.Utxo
+	if i.mempoolManager != nil {
+		mempoolIncomeData, mempoolSpendData = i.mempoolManager.GetDataByAddress(address)
+		mempoolIncomeList = getUtxoFromMempoolIncomeMap(mempoolIncomeData)
+	}
 	//mempoolIncomeList, err := i.mempoolManager.GetUTXOsByAddress(address)
 
 	for _, utxo := range mempoolIncomeList {
@@ -113,14 +119,19 @@ func (i *UTXOIndexer) GetBalance(address string, dustThreshold int64) (balanceRe
 		}
 		mempoolCheckTxMap[utxo.TxID] = in
 	}
-	// Check if mempool is spent
+	// Check if mempool is spent - only process if mempool manager is available
 	//if len(mempoolCheckTxMap) > 0 {
 	// var list []string
 	// for txPoint := range mempoolCheckTxMap {
 	// 	list = append(list, txPoint)
 	// }
 	// mempoolSpendMap, _ := i.mempoolManager.GetSpendUTXOs(list)
-	mempoolSpendMap := getUtxoFromMempoolSpendMap(mempoolSpendData)
+	var mempoolSpendMap map[string]struct{}
+	if i.mempoolManager != nil && mempoolSpendData != nil {
+		mempoolSpendMap = getUtxoFromMempoolSpendMap(mempoolSpendData)
+	} else {
+		mempoolSpendMap = make(map[string]struct{})
+	}
 	for txPoint := range mempoolSpendMap {
 		// 检查内存池的花费是否已经在出块的花费中
 		if _, exists := spendMap[txPoint]; exists {
@@ -277,7 +288,12 @@ func (i *UTXOIndexer) GetUTXOs(address string) (result []UTXO, err error) {
 		// 	list = append(list, txPoint)
 		// }
 		// mempoolSpendMap, _ := i.mempoolManager.GetSpendUTXOs(list)
-		mempoolSpendMap := getUtxoFromMempoolSpendMap(mempoolSpendData)
+		var mempoolSpendMap map[string]struct{}
+		if i.mempoolManager != nil && mempoolSpendData != nil {
+			mempoolSpendMap = getUtxoFromMempoolSpendMap(mempoolSpendData)
+		} else {
+			mempoolSpendMap = make(map[string]struct{})
+		}
 		for txPoint := range mempoolSpendMap {
 			if _, exists := mempoolCheckTxMap[txPoint]; exists {
 				spendMap[txPoint] = struct{}{}

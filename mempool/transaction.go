@@ -31,15 +31,48 @@ type MempoolManager struct {
 
 // NewMempoolManager creates a new mempool manager
 func NewMempoolManager(basePath string, utxoStore *storage.PebbleStore, chainCfg *chaincfg.Params, zmqAddress []string) *MempoolManager {
-	mempoolIncomeDB, err := storage.NewSimpleDB(basePath + "/mempool_income")
-	if err != nil {
-		log.Printf("Failed to create mempool income database: %v", err)
+	log.Printf("DEBUG: NewMempoolManager called with basePath=%s", basePath)
+
+	incomeDBPath := basePath + "/mempool_income"
+	spendDBPath := basePath + "/mempool_spend"
+
+	log.Printf("Creating mempool databases at: income=%s, spend=%s", incomeDBPath, spendDBPath)
+
+	// Check if base directory exists and is writable
+	if err := os.MkdirAll(basePath, 0755); err != nil {
+		log.Printf("ERROR: Failed to create base directory %s: %v", basePath, err)
 		return nil
 	}
 
-	mempoolSpendDB, err := storage.NewSimpleDB(basePath + "/mempool_spend")
+	// Test write permission
+	testFile := basePath + "/test_write_permission"
+	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
+		log.Printf("ERROR: No write permission in directory %s: %v", basePath, err)
+		return nil
+	}
+	os.Remove(testFile) // Clean up test file
+
+	log.Printf("Base directory %s exists and is accessible", basePath)
+
+	// Create subdirectories for each database
+	if err := os.MkdirAll(incomeDBPath, 0755); err != nil {
+		log.Printf("ERROR: Failed to create income database directory %s: %v", incomeDBPath, err)
+		return nil
+	}
+	if err := os.MkdirAll(spendDBPath, 0755); err != nil {
+		log.Printf("ERROR: Failed to create spend database directory %s: %v", spendDBPath, err)
+		return nil
+	}
+
+	mempoolIncomeDB, err := storage.NewSimpleDB(incomeDBPath)
 	if err != nil {
-		log.Printf("Failed to create mempool spend database: %v", err)
+		log.Printf("ERROR: Failed to create mempool income database at %s: %v", incomeDBPath, err)
+		return nil
+	}
+
+	mempoolSpendDB, err := storage.NewSimpleDB(spendDBPath)
+	if err != nil {
+		log.Printf("ERROR: Failed to create mempool spend database at %s: %v", spendDBPath, err)
 		mempoolIncomeDB.Close()
 		return nil
 	}

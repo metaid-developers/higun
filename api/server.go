@@ -55,6 +55,7 @@ func (s *Server) setupRoutes() {
 	s.Router.GET("/utxos/spend", s.getSpendUTXOs)
 	s.Router.GET("/utxo/db", s.getUtxoByTx)
 	s.Router.POST("/tx/btc-utxo/check", s.checkUtxo)
+	s.Router.POST("/utxo/check", s.checkUtxo)
 	s.Router.GET("/mempool/utxos", s.getMempoolUTXOs)
 	s.Router.GET("/cleanedHeight/get", s.getCleanedHeight)
 	s.Router.GET("/utxos/history", s.getHistoryUTXOs)
@@ -143,6 +144,9 @@ func (s *Server) startMempool(c *gin.Context) {
 
 }
 func (s *Server) RebuildMempool() error {
+	if s.mempoolMgr == nil {
+		return fmt.Errorf("mempool manager not initialized")
+	}
 	return s.mempoolMgr.RebuildMempool()
 }
 

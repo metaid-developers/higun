@@ -2,6 +2,8 @@ package storage
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -17,6 +19,11 @@ type SimpleDB struct {
 
 // NewSimpleDB creates a new single database connection
 func NewSimpleDB(dbPath string) (*SimpleDB, error) {
+	// Create parent directories if needed (same as PebbleStore)
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+		return nil, fmt.Errorf("Failed to create db directory: %w", err)
+	}
+
 	db, err := pebble.Open(dbPath, &pebble.Options{Logger: noopLogger})
 	if err != nil {
 		return nil, fmt.Errorf("Failed to open database: %w", err)
