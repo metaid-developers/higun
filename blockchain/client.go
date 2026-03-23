@@ -252,7 +252,7 @@ func (c *Client) SyncBlocks(idx *indexer.UTXOIndexer, checkInterval time.Duratio
 				Timestamp:    time.Now().Unix(),
 				ErrorMessage: err.Error(),
 			}
-			go syslogs.InsertErrLog(errMsg)
+			syslogs.InsertErrLog(errMsg)
 			log.Printf("Failed to get last indexed height, retrying in 10 seconds: %v", err)
 			select {
 			case <-stopCh:
@@ -316,7 +316,7 @@ func (c *Client) SyncBlocks(idx *indexer.UTXOIndexer, checkInterval time.Duratio
 						Timestamp:    time.Now().Unix(),
 						ErrorMessage: err.Error(),
 					}
-					go syslogs.InsertErrLog(errMsg)
+					syslogs.InsertErrLog(errMsg)
 					log.Printf("Failed to process block at height %d: %v, retrying in 15 seconds...", height, err)
 					select {
 					case <-stopCh:
@@ -558,7 +558,7 @@ func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight
 				Timestamp:    time.Now().Unix(),
 				ErrorMessage: err.Error(),
 			}
-			go syslogs.InsertErrLog(errMsg)
+			syslogs.InsertErrLog(errMsg)
 			log.Printf("Failed to get block via adapter, height %d: %v", height, err)
 			return err
 		}
@@ -594,7 +594,7 @@ func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight
 					Timestamp:    time.Now().Unix(),
 					ErrorMessage: err.Error(),
 				}
-				go syslogs.InsertErrLog(errMsg)
+				syslogs.InsertErrLog(errMsg)
 				return fmt.Errorf("index block failed, height %d: %w", height, err)
 			}
 
@@ -623,7 +623,7 @@ func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight
 			TxNum:          int64(txCount),
 			CompletionTime: time.Now().Unix(),
 		}
-		go syslogs.InsertIndexerLog(logEntry)
+		syslogs.InsertIndexerLog(logEntry)
 
 		return nil
 	}
@@ -643,7 +643,7 @@ func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight
 			Timestamp:    time.Now().Unix(),
 			ErrorMessage: err.Error(),
 		}
-		go syslogs.InsertErrLog(errMsg)
+		syslogs.InsertErrLog(errMsg)
 
 		log.Printf("Failed to get block message, height %d: %v", height, err)
 		return err
@@ -655,7 +655,7 @@ func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight
 			Timestamp:    time.Now().Unix(),
 			ErrorMessage: "block message is nil",
 		}
-		go syslogs.InsertErrLog(errMsg)
+		syslogs.InsertErrLog(errMsg)
 		return fmt.Errorf("block message is nil, height %d", height)
 	}
 	blockHash := ""
@@ -738,7 +738,7 @@ func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight
 				Timestamp:    time.Now().Unix(),
 				ErrorMessage: err.Error(),
 			}
-			go syslogs.InsertErrLog(errMsg)
+			syslogs.InsertErrLog(errMsg)
 			return fmt.Errorf("index block failed, height %d: %w", height, err)
 		} else {
 			totalInCnt += inCnt

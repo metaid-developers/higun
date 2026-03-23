@@ -225,11 +225,11 @@ func NewMetaStore(dataDir string) (*MetaStore, error) {
 // Configure database options
 
 const (
-	defaultPebbleMemTableSizeBytes                 = 128 << 20
-	defaultPebbleCacheSizeBytes              int64 = 20 << 20
-	defaultPebbleMemTableStopWritesThreshold       = 6
-	defaultPebbleMaxConcurrentCompactions          = 6
-	defaultPebbleMaxOpenFiles                      = 10000
+	defaultPebbleMemTableSizeBytes                 = 32 << 20 // 32MB per shard
+	defaultPebbleCacheSizeBytes              int64 = 10 << 20 // 10MB per shard
+	defaultPebbleMemTableStopWritesThreshold       = 2
+	defaultPebbleMaxConcurrentCompactions          = 4
+	defaultPebbleMaxOpenFiles                      = 5000
 )
 
 func NewPebbleStore(params config.IndexerParams, dataDir string, storeType StoreType, shardCount int) (*PebbleStore, error) {
@@ -484,8 +484,8 @@ func newPebbleDBOptions(_ config.IndexerParams, openOpts PebbleOpenOptions) (*pe
 		MemTableSize:                memTableSizeBytes,
 		MemTableStopWritesThreshold: memTableStopWritesThreshold,
 		Cache:                       cache,
-		L0CompactionThreshold:       10,
-		L0StopWritesThreshold:       32,
+		L0CompactionThreshold:       8,
+		L0StopWritesThreshold:       24,
 		MaxConcurrentCompactions:    func() int { return maxConcurrentCompactions },
 		MaxOpenFiles:                maxOpenFiles,
 		ReadOnly:                    openOpts.ReadOnly,

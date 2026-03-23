@@ -235,7 +235,7 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 			Timestamp:    time.Now().Unix(),
 			ErrorMessage: err.Error(),
 		}
-		go syslogs.InsertErrLog(errMsg)
+		syslogs.InsertErrLog(errMsg)
 		return 0, 0, 0, fmt.Errorf("failed to index outputs: %w", err)
 	} else {
 		outCnt = cnt
@@ -257,7 +257,7 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 			Timestamp:    time.Now().Unix(),
 			ErrorMessage: err.Error(),
 		}
-		go syslogs.InsertErrLog(errMsg)
+		syslogs.InsertErrLog(errMsg)
 		return 0, 0, 0, fmt.Errorf("failed to process inputs: %w", err)
 	} else {
 		inCnt = cnt
@@ -317,7 +317,7 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 				Timestamp:    time.Now().Unix(),
 				ErrorMessage: err.Error(),
 			}
-			go syslogs.InsertErrLog(errMsg)
+			syslogs.InsertErrLog(errMsg)
 			return 0, 0, 0, fmt.Errorf("failed to update last indexed height: %w", err)
 		}
 
@@ -412,7 +412,7 @@ func SaveBlockFile(fileType string, allBlock *Block, isPart bool) {
 				Timestamp:    time.Now().Unix(),
 				ErrorMessage: err.Error(),
 			}
-			go syslogs.InsertErrLog(errMsg)
+			syslogs.InsertErrLog(errMsg)
 		}
 		//释放内存
 		fblock = nil
@@ -430,7 +430,7 @@ func SaveBlockFile(fileType string, allBlock *Block, isPart bool) {
 				Timestamp:    time.Now().Unix(),
 				ErrorMessage: err.Error(),
 			}
-			go syslogs.InsertErrLog(errMsg)
+			syslogs.InsertErrLog(errMsg)
 		}
 		//释放内存
 		fblock = nil
@@ -520,7 +520,7 @@ func (i *UTXOIndexer) indexIncome(block *Block, allBlock *Block, blockTimeStr st
 				Timestamp:    time.Now().Unix(),
 				ErrorMessage: err.Error(),
 			}
-			go syslogs.InsertErrLog(errMsg)
+			syslogs.InsertErrLog(errMsg)
 			return 0, 0, err
 		} else {
 			cnt = inCnt
@@ -622,7 +622,7 @@ func (i *UTXOIndexer) indexIncome(block *Block, allBlock *Block, blockTimeStr st
 				Timestamp:    time.Now().Unix(),
 				ErrorMessage: err.Error(),
 			}
-			go syslogs.InsertErrLog(errMsg)
+			syslogs.InsertErrLog(errMsg)
 			return 0, 0, err
 		} else {
 			addressNum = len(addressIncomeMap)
@@ -638,7 +638,7 @@ func (i *UTXOIndexer) indexIncome(block *Block, allBlock *Block, blockTimeStr st
 					Timestamp:    time.Now().Unix(),
 					ErrorMessage: err.Error(),
 				}
-				go syslogs.InsertErrLog(errMsg)
+				syslogs.InsertErrLog(errMsg)
 				log.Printf("Failed to delete mempool income records: %v", err)
 			}
 			mempoolIncomeKeys = nil // Clean up memory
@@ -775,7 +775,7 @@ func (i *UTXOIndexer) processSpend(block *Block, allBlock *Block, blockTimeStr s
 					Timestamp:    time.Now().Unix(),
 					ErrorMessage: err.Error(),
 				}
-				go syslogs.InsertErrLog(errMsg)
+				syslogs.InsertErrLog(errMsg)
 				return 0, fmt.Errorf("failed to query UTXO addresses: %w", err)
 			}
 			// Merge database results
@@ -834,7 +834,7 @@ func (i *UTXOIndexer) processSpend(block *Block, allBlock *Block, blockTimeStr s
 				Timestamp:    time.Now().Unix(),
 				ErrorMessage: err.Error(),
 			}
-			go syslogs.InsertErrLog(errMsg)
+			syslogs.InsertErrLog(errMsg)
 			return 0, fmt.Errorf("failed to merge address results: %w", err)
 		} else {
 			cnt = inCnt
@@ -864,7 +864,7 @@ func (i *UTXOIndexer) processSpend(block *Block, allBlock *Block, blockTimeStr s
 					Timestamp:    time.Now().Unix(),
 					ErrorMessage: err.Error(),
 				}
-				go syslogs.InsertErrLog(errMsg)
+				syslogs.InsertErrLog(errMsg)
 				log.Printf("Failed to delete mempool spend records: %v", err)
 			}
 		}
