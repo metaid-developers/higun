@@ -73,20 +73,30 @@ func (m *MempoolManager) getRawSpendByAddress(address string) (spendUtxoList []c
 
 // GetUTXOsByAddress gets mempool UTXOs for the specified address
 func (m *MempoolManager) GetUTXOsByAddress(address string) (incomeUtxoList []common.Utxo, err error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	// Get raw UTXO data
 	return m.getRawUTXOsByAddress(address)
 }
 func (m *MempoolManager) GetSpendByAddress(address string) (spendUtxoList []common.Utxo, err error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	// Get raw UTXO data
 	return m.getRawSpendByAddress(address)
 }
 func (m *MempoolManager) BatchDeleteIncom(list []string) (err error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.MempoolIncomeDB.BatchDeleteMempolRecord(list)
 }
 func (m *MempoolManager) BatchDeleteSpend(list []string) (err error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.MempoolSpendDB.BatchDeleteMempolRecord(list)
 }
 func (m *MempoolManager) GetSpendUTXOs(txPoints []string) (spendMap map[string]struct{}, err error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	list, _ := m.MempoolSpendDB.BatchGetMempolRecord(txPoints)
 	spendMap = make(map[string]struct{}, len(list))
 	for _, txPoint := range list {
@@ -103,6 +113,8 @@ func (m *MempoolManager) StartMempool() (err error) {
 }
 
 func (m *MempoolManager) GetDataByAddress(address string) (income map[string]string, spend map[string]string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	income, _ = m.MempoolIncomeDB.GetByPrefix(address)
 	spend, _ = m.MempoolSpendDB.GetByPrefix(address)
 	return income, spend

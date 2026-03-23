@@ -253,7 +253,13 @@ func (c *Client) SyncBlocks(idx *indexer.UTXOIndexer, checkInterval time.Duratio
 				ErrorMessage: err.Error(),
 			}
 			go syslogs.InsertErrLog(errMsg)
-			return fmt.Errorf("Failed to get last indexed height: %w", err)
+			log.Printf("Failed to get last indexed height, retrying in 10 seconds: %v", err)
+			select {
+			case <-stopCh:
+				return nil
+			case <-time.After(10 * time.Second):
+			}
+			continue
 		}
 		//test := []int{10000, 10002}
 		// test := []int{126230, 126235}
@@ -263,7 +269,13 @@ func (c *Client) SyncBlocks(idx *indexer.UTXOIndexer, checkInterval time.Duratio
 		// Get current blockchain height
 		currentHeight, err := c.GetBlockCount()
 		if err != nil {
-			return fmt.Errorf("Failed to get current block height: %w", err)
+			log.Printf("Failed to get current block height, retrying in 15 seconds: %v", err)
+			select {
+			case <-stopCh:
+				return nil
+			case <-time.After(15 * time.Second):
+			}
+			continue
 		}
 		//currentHeight = test[1] // For testing, should get from blockchain in actual use
 		// Check if there are new blocks
@@ -296,9 +308,24 @@ func (c *Client) SyncBlocks(idx *indexer.UTXOIndexer, checkInterval time.Duratio
 				continue
 			}
 			idx.SetSyncCount(height, currentHeight)
-			//t0 := time.Now()
-			if err := c.ProcessBlock(idx, height, true, currentHeight); err != nil {
-				return fmt.Errorf("Failed to process block at height %d: %w", height, err)
+			for {
+				if err := c.ProcessBlock(idx, height, true, currentHeight); err != nil {
+					errMsg := syslogs.ErrLog{
+						Height:       height,
+						ErrType:      "ProcessBlock",
+						Timestamp:    time.Now().Unix(),
+						ErrorMessage: err.Error(),
+					}
+					go syslogs.InsertErrLog(errMsg)
+					log.Printf("Failed to process block at height %d: %v, retrying in 15 seconds...", height, err)
+					select {
+					case <-stopCh:
+						return nil
+					case <-time.After(15 * time.Second):
+					}
+					continue
+				}
+				break
 			}
 			//fmt.Printf(">>>Indexing height %d took: %.2fs\n", height, time.Since(t0).Seconds())
 		}

@@ -573,8 +573,17 @@ func main() {
 
 	// Use goroutine to start block sync
 	go func() {
-		if err := resources.bcClient.SyncBlocks(idx, checkInterval, stopCh, firstSyncCompleted); err != nil {
-			log.Printf("Failed to sync FT blocks: %v", err)
+		for {
+			if err := resources.bcClient.SyncBlocks(idx, checkInterval, stopCh, firstSyncCompleted); err != nil {
+				log.Printf("Failed to sync FT blocks: %v, retrying in 15 seconds...", err)
+				select {
+				case <-stopCh:
+					return
+				case <-time.After(15 * time.Second):
+				}
+			} else {
+				return
+			}
 		}
 	}()
 

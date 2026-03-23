@@ -41,6 +41,10 @@ type UTXOIndexer struct {
 	memHits         int64    // Memory cache hits
 	dbHits          int64    // Database query hits
 	memUTXOMaxCount int64    // Maximum number of UTXOs to cache (default: 5 million)
+
+	// richListRefreshing is 1 while a background scan is running; 0 otherwise.
+	// Used to ensure only one scan runs at a time (CAS, never blocks callers).
+	richListRefreshing atomic.Int32
 }
 
 var workers = 1

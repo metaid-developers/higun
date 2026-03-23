@@ -30,28 +30,34 @@ var GlobalConfig *Config
 var GlobalNetwork *chaincfg.Params
 
 type Config struct {
-	Chain                   string    `yaml:"chain"` // 新增: 链类型标识
-	Network                 string    `yaml:"network"`
-	DataDir                 string    `yaml:"data_dir"`
-	BlockInfoIndexer        bool      `yaml:"block_info_indexer"`
-	BlockFilesEnabled       bool      `yaml:"block_files_enabled"` // 是否启用区块归档文件，关闭可提升索引速度
-	BlockFilesDir           string    `yaml:"block_files_dir"`
-	BackupDir               string    `yaml:"backup_dir"`
-	ShardCount              int       `yaml:"shard_count"`
-	BatchSize               int       `yaml:"batch_size"`
-	OnceTxCount             int       `yaml:"once_tx_count"`
-	TxConcurrency           int       `yaml:"tx_concurrency"`
-	Workers                 int       `yaml:"workers"`
-	MemUTXOMaxCount         int       `yaml:"mem_utxo_max_count"` // Memory UTXO cache size
-	CPUCores                int       `yaml:"cpu_cores"`
-	MemoryGB                int       `yaml:"memory_gb"`
-	HighPerf                bool      `yaml:"high_perf"`
-	APIPort                 string    `yaml:"api_port"`
-	ZMQAddress              []string  `yaml:"zmq_address"`
-	ZmqReconnectInterval    int       `yaml:"zmq_reconnect_interval"`
-	MemPoolCleanStartHeight int       `yaml:"mempool_clean_start_height"` // 已废弃: 现在自动判断，仅保留向后兼容
-	MaxTxPerBatch           int       `yaml:"max_tx_per_batch"`
-	RPC                     RPCConfig `yaml:"rpc"`
+	Chain                   string   `yaml:"chain"` // 新增: 链类型标识
+	Network                 string   `yaml:"network"`
+	DataDir                 string   `yaml:"data_dir"`
+	BlockInfoIndexer        bool     `yaml:"block_info_indexer"`
+	BlockFilesEnabled       bool     `yaml:"block_files_enabled"` // 是否启用区块归档文件，关闭可提升索引速度
+	BlockFilesDir           string   `yaml:"block_files_dir"`
+	BackupDir               string   `yaml:"backup_dir"`
+	ShardCount              int      `yaml:"shard_count"`
+	BatchSize               int      `yaml:"batch_size"`
+	OnceTxCount             int      `yaml:"once_tx_count"`
+	TxConcurrency           int      `yaml:"tx_concurrency"`
+	Workers                 int      `yaml:"workers"`
+	MemUTXOMaxCount         int      `yaml:"mem_utxo_max_count"` // Memory UTXO cache size
+	CPUCores                int      `yaml:"cpu_cores"`
+	MemoryGB                int      `yaml:"memory_gb"`
+	HighPerf                bool     `yaml:"high_perf"`
+	APIPort                 string   `yaml:"api_port"`
+	ZMQAddress              []string `yaml:"zmq_address"`
+	ZmqReconnectInterval    int      `yaml:"zmq_reconnect_interval"`
+	MemPoolCleanStartHeight int      `yaml:"mempool_clean_start_height"` // 已废弃: 现在自动判断，仅保留向后兼容
+	MaxTxPerBatch           int      `yaml:"max_tx_per_batch"`
+	// 大区块处理策略:区块体积(字节)超过此阈值时，改用逐笔TX拉取模式，避免整块加载导致OOM
+	// 默认 209715200 = 200MB；BTC/DOGE 永远不会触发（它们的块上限远小于此值）
+	// 启用此功能要求节点已开启 txindex=1
+	LargeBlockThresholdBytes int64 `yaml:"large_block_threshold_bytes"`
+	// 大区块逐TX拉取时的并发 goroutine 数，默认 20
+	LargeBlockFetchWorkers int       `yaml:"large_block_fetch_workers"`
+	RPC                    RPCConfig `yaml:"rpc"`
 }
 
 func (c *Config) GetChainParams() (*chaincfg.Params, error) {
@@ -118,15 +124,17 @@ func LoadConfig(path string) (*Config, error) {
 	flag.Parse()
 	// Default config
 	cfg := &Config{
-		Chain:                   ChainBTC, // 默认 BTC
-		Network:                 "testnet",
-		DataDir:                 "data",
-		BackupDir:               "data/backups",
-		ShardCount:              16,
-		APIPort:                 "8080",
-		ZMQAddress:              []string{"tcp://localhost:28332"},
-		MemPoolCleanStartHeight: 0,    // 已废弃: 自动判断最新区块时才清理
-		MaxTxPerBatch:           3000, // Default: process up to 3000 transactions per batch
+		Chain:                    ChainBTC, // 默认 BTC
+		Network:                  "testnet",
+		DataDir:                  "data",
+		BackupDir:                "data/backups",
+		ShardCount:               16,
+		APIPort:                  "8080",
+		ZMQAddress:               []string{"tcp://localhost:28332"},
+		MemPoolCleanStartHeight:  0,                 // 已废弃: 自动判断最新区块时才清理
+		MaxTxPerBatch:            3000,              // Default: process up to 3000 transactions per batch
+		LargeBlockThresholdBytes: 200 * 1024 * 1024, // 200MB，超过此值改用逐TX拉取
+		LargeBlockFetchWorkers:   20,                // 大块逐TX拉取并发数
 		RPC: RPCConfig{
 			Chain: ChainBTC, // 默认 BTC
 			Host:  "localhost",

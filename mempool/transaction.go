@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/btcsuite/btcd/chaincfg"
@@ -21,6 +22,7 @@ import (
 
 // MempoolManager manages mempool transactions
 type MempoolManager struct {
+	mu              sync.RWMutex         // protects MempoolIncomeDB and MempoolSpendDB during rebuild
 	utxoStore       *storage.PebbleStore // Main UTXO storage, using sharding
 	MempoolIncomeDB *storage.SimpleDB    // Mempool income database
 	MempoolSpendDB  *storage.SimpleDB    // Mempool spend database
@@ -125,6 +127,10 @@ func (m *MempoolManager) HandleRawTransaction(topic string, data []byte) error {
 	if err != nil {
 		return fmt.Errorf("Failed to parse transaction: %w", err)
 	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	// 2. Process transaction outputs, create new UTXOs
 	err = m.processOutputs(tx, timeStr)
 	if err != nil {
@@ -268,6 +274,9 @@ func (m *MempoolManager) ProcessNewBlockTxs(incomeUtxoList []common.Utxo, spendT
 		return nil
 	}
 
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	//log.Printf("Processing %d transactions in new block, cleaning mempool records", len(incomeUtxoList))
 
 	// Delete income
@@ -401,17 +410,21 @@ func (m *MempoolManager) InitializeMempool(bcClient interface{}) {
 				// Use existing transaction processing methods
 				msgTx := tx.MsgTx()
 
+				m.mu.RLock()
 				// Process outputs first (create new UTXOs)
 				if err := m.processOutputs(msgTx, timeStr); err != nil {
 					log.Printf("Failed to process transaction outputs %s: %v", txid, err)
+					m.mu.RUnlock()
 					continue
 				}
 
 				// Then process inputs (mark spent UTXOs)
 				if err := m.processInputs(msgTx, timeStr); err != nil {
 					log.Printf("Failed to process transaction inputs %s: %v", txid, err)
+					m.mu.RUnlock()
 					continue
 				}
+				m.mu.RUnlock()
 			}
 
 			// After batch is processed, pause briefly to allow other programs to execute
@@ -436,6 +449,10 @@ func (m *MempoolManager) CleanAllMempool() error {
 	// Use basePath and fixed table names to get database file paths
 	incomeDbPath := m.basePath + "/mempool_income"
 	spendDbPath := m.basePath + "/mempool_spend"
+
+	// Acquire write lock to prevent concurrent reads during DB close/recreate
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	// No longer try to detect database status, directly use defer and recover to handle possible panics
 	defer func() {
@@ -547,6 +564,10 @@ func (m *MempoolManager) RebuildMempool() error {
 
 	incomeDbPath := m.basePath + "/mempool_income"
 	spendDbPath := m.basePath + "/mempool_spend"
+
+	// Acquire write lock to prevent concurrent reads during DB close/recreate
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	defer func() {
 		if r := recover(); r != nil {

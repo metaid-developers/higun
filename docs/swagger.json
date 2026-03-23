@@ -1,0 +1,1225 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "HiGun API",
+    "description": "HiGun is a MetaID-based UTXO indexer supporting FT (Fungible Token) and NFT (Non-Fungible Token) chain data queries.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "HiGun Team"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": "Default server"
+    }
+  ],
+  "paths": {
+    "/ft/balance": {
+      "get": {
+        "summary": "Get FT Balance",
+        "description": "Query FT balance for a specified address",
+        "operationId": "getFtBalance",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "query",
+            "description": "Wallet address",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "codeHash",
+            "in": "query",
+            "description": "FT code hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "genesis",
+            "in": "query",
+            "description": "FT genesis ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FtBalanceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ft/utxos": {
+      "get": {
+        "summary": "Get FT UTXOs",
+        "description": "Query FT UTXO list for a specified address",
+        "operationId": "getFtUTXOs",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "query",
+            "description": "Wallet address",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "codeHash",
+            "in": "query",
+            "description": "FT code hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "genesis",
+            "in": "query",
+            "description": "FT genesis ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FtUTXOsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ft/unique/utxos": {
+      "get": {
+        "summary": "Get Unique FT UTXOs",
+        "description": "Query unique FT UTXOs for tracking fungible tokens",
+        "operationId": "getUniqueFtUTXOs",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "query",
+            "description": "Wallet address",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "codeHash",
+            "in": "query",
+            "description": "FT code hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "genesis",
+            "in": "query",
+            "description": "FT genesis ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/ft/summary": {
+      "get": {
+        "summary": "Get FT Summary",
+        "description": "Get overall FT overview information",
+        "operationId": "getFtSummary",
+        "parameters": [
+          {
+            "name": "codeHash",
+            "in": "query",
+            "description": "FT code hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "genesis",
+            "in": "query",
+            "description": "FT genesis ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/ft/genesis": {
+      "get": {
+        "summary": "Get FT Genesis",
+        "description": "Get FT genesis information",
+        "operationId": "getFtGenesis",
+        "parameters": [
+          {
+            "name": "codeHash",
+            "in": "query",
+            "description": "FT code hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "genesis",
+            "in": "query",
+            "description": "FT genesis ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FtGenesisResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ft/supply": {
+      "get": {
+        "summary": "Get FT Supply",
+        "description": "Query FT total supply",
+        "operationId": "getFtSupply",
+        "parameters": [
+          {
+            "name": "codeHash",
+            "in": "query",
+            "description": "FT code hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "genesis",
+            "in": "query",
+            "description": "FT genesis ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/ft/owners": {
+      "get": {
+        "summary": "Get FT Owners",
+        "description": "Get all FT holders",
+        "operationId": "getFtOwners",
+        "parameters": [
+          {
+            "name": "codeHash",
+            "in": "query",
+            "description": "FT code hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "genesis",
+            "in": "query",
+            "description": "FT genesis ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/ft/address/history": {
+      "get": {
+        "summary": "Get Address FT History",
+        "description": "Get FT transaction history for specified address",
+        "operationId": "getFtAddressHistory",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "query",
+            "description": "Wallet address",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "codeHash",
+            "in": "query",
+            "description": "FT code hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "genesis",
+            "in": "query",
+            "description": "FT genesis ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/ft/genesis/history": {
+      "get": {
+        "summary": "Get Genesis FT History",
+        "description": "Get FT transaction history for specified genesis",
+        "operationId": "getFtGenesisHistory",
+        "parameters": [
+          {
+            "name": "codeHash",
+            "in": "query",
+            "description": "FT code hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "genesis",
+            "in": "query",
+            "description": "FT genesis ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/ft/mempool/utxos": {
+      "get": {
+        "summary": "Get Mempool FT UTXOs",
+        "description": "Get unconfirmed FT UTXOs in mempool",
+        "operationId": "getFtMempoolUTXOs",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "query",
+            "description": "Wallet address",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "codeHash",
+            "in": "query",
+            "description": "FT code hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "genesis",
+            "in": "query",
+            "description": "FT genesis ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/ft/mempool/start": {
+      "get": {
+        "summary": "Start Mempool",
+        "description": "Start ZMQ and mempool monitoring",
+        "operationId": "startMempool",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MempoolStartResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ft/mempool/rebuild": {
+      "get": {
+        "summary": "Rebuild Mempool",
+        "description": "Rebuild mempool data",
+        "operationId": "rebuildMempool",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/ft/blocks/reindex": {
+      "get": {
+        "summary": "Reindex Blocks",
+        "description": "Reindex blocks in specified range",
+        "operationId": "reindexBlocks",
+        "parameters": [
+          {
+            "name": "start",
+            "in": "query",
+            "description": "Start block height",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "description": "End block height",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/nft/address/utxos": {
+      "get": {
+        "summary": "Get Address NFT UTXOs",
+        "description": "Get NFT UTXO list for specified address",
+        "operationId": "getNftAddressUtxos",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "query",
+            "description": "Wallet address",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "codeHash",
+            "in": "query",
+            "description": "NFT code hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "genesis",
+            "in": "query",
+            "description": "NFT genesis ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "description": "Page size",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NftUTXOsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/nft/genesis/utxos": {
+      "get": {
+        "summary": "Get Genesis NFT UTXOs",
+        "description": "Get NFT UTXO list for specified genesis",
+        "operationId": "getNftGenesisUtxos",
+        "parameters": [
+          {
+            "name": "codeHash",
+            "in": "query",
+            "description": "NFT code hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "genesis",
+            "in": "query",
+            "description": "NFT genesis ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "description": "Page size",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/nft/address/sell-utxos": {
+      "get": {
+        "summary": "Get Address Selling NFT UTXOs",
+        "description": "Get NFT UTXOs for sale from specified address",
+        "operationId": "getNftAddressSellUtxos",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "query",
+            "description": "Wallet address",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "codeHash",
+            "in": "query",
+            "description": "NFT code hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "genesis",
+            "in": "query",
+            "description": "NFT genesis ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/nft/genesis/sell-utxos": {
+      "get": {
+        "summary": "Get Genesis Selling NFT UTXOs",
+        "description": "Get NFT UTXOs for sale from specified genesis",
+        "operationId": "getNftGenesisSellUtxos",
+        "parameters": [
+          {
+            "name": "codeHash",
+            "in": "query",
+            "description": "NFT code hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "genesis",
+            "in": "query",
+            "description": "NFT genesis ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/nft/address/utxo-count": {
+      "get": {
+        "summary": "Get Address NFT UTXO Count",
+        "description": "Get NFT UTXO count for specified address",
+        "operationId": "getNftAddressUtxoCount",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "query",
+            "description": "Wallet address",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "codeHash",
+            "in": "query",
+            "description": "NFT code hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "genesis",
+            "in": "query",
+            "description": "NFT genesis ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/nft/address/summary": {
+      "get": {
+        "summary": "Get Address NFT Summary",
+        "description": "Get NFT holding summary for specified address",
+        "operationId": "getNftAddressSummary",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "query",
+            "description": "Wallet address",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/nft/summary": {
+      "get": {
+        "summary": "Get NFT Summary",
+        "description": "Get overall NFT overview",
+        "operationId": "getNftSummary",
+        "parameters": [
+          {
+            "name": "codeHash",
+            "in": "query",
+            "description": "NFT code hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "genesis",
+            "in": "query",
+            "description": "NFT genesis ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/nft/genesis": {
+      "get": {
+        "summary": "Get NFT Genesis",
+        "description": "Get NFT genesis details",
+        "operationId": "getNftGenesis",
+        "parameters": [
+          {
+            "name": "codeHash",
+            "in": "query",
+            "description": "NFT code hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "genesis",
+            "in": "query",
+            "description": "NFT genesis ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NftGenesisResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/nft/owners": {
+      "get": {
+        "summary": "Get NFT Owners",
+        "description": "Get all NFT holders",
+        "operationId": "getNftOwners",
+        "parameters": [
+          {
+            "name": "codeHash",
+            "in": "query",
+            "description": "NFT code hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "genesis",
+            "in": "query",
+            "description": "NFT genesis ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/nft/mempool/start": {
+      "get": {
+        "summary": "Start NFT Mempool",
+        "description": "Start NFT mempool monitoring",
+        "operationId": "startNftMempool",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/nft/mempool/rebuild": {
+      "get": {
+        "summary": "Rebuild NFT Mempool",
+        "description": "Rebuild NFT mempool data",
+        "operationId": "rebuildNftMempool",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/nft/blocks/reindex": {
+      "get": {
+        "summary": "Reindex NFT Blocks",
+        "description": "Reindex NFT blocks in specified range",
+        "operationId": "reindexNftBlocks",
+        "parameters": [
+          {
+            "name": "start",
+            "in": "query",
+            "description": "Start block height",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "description": "End block height",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "SuccessResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "code": {
+            "type": "integer",
+            "example": 200
+          },
+          "data": {
+            "type": "object"
+          },
+          "time": {
+            "type": "integer",
+            "description": "Unix timestamp in milliseconds"
+          },
+          "cost": {
+            "type": "integer",
+            "description": "Processing time in milliseconds"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": false
+          },
+          "code": {
+            "type": "integer",
+            "example": 400
+          },
+          "error": {
+            "type": "string"
+          },
+          "time": {
+            "type": "integer"
+          },
+          "cost": {
+            "type": "integer"
+          }
+        }
+      },
+      "FtBalanceResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "code": {
+            "type": "integer"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "balances": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FtBalance"
+                }
+              }
+            }
+          },
+          "time": {
+            "type": "integer"
+          },
+          "cost": {
+            "type": "integer"
+          }
+        }
+      },
+      "FtBalance": {
+        "type": "object",
+        "properties": {
+          "codeHash": {
+            "type": "string"
+          },
+          "genesis": {
+            "type": "string"
+          },
+          "balance": {
+            "type": "string"
+          },
+          "satoshi": {
+            "type": "string"
+          }
+        }
+      },
+      "FtUTXOsResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "code": {
+            "type": "integer"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "address": {
+                "type": "string"
+              },
+              "utxos": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FtUTXO"
+                }
+              },
+              "count": {
+                "type": "integer"
+              }
+            }
+          },
+          "time": {
+            "type": "integer"
+          },
+          "cost": {
+            "type": "integer"
+          }
+        }
+      },
+      "FtUTXO": {
+        "type": "object",
+        "properties": {
+          "codeHash": {
+            "type": "string"
+          },
+          "genesis": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "sensibleId": {
+            "type": "string"
+          },
+          "txid": {
+            "type": "string"
+          },
+          "txIndex": {
+            "type": "integer"
+          },
+          "valueString": {
+            "type": "string"
+          },
+          "satoshiString": {
+            "type": "string"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "address": {
+            "type": "string"
+          },
+          "flag": {
+            "type": "string"
+          }
+        }
+      },
+      "FtGenesisResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "code": {
+            "type": "integer"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "codeHash": {
+                "type": "string"
+              },
+              "genesis": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "symbol": {
+                "type": "string"
+              },
+              "decimal": {
+                "type": "integer"
+              },
+              "totalSupply": {
+                "type": "string"
+              }
+            }
+          },
+          "time": {
+            "type": "integer"
+          },
+          "cost": {
+            "type": "integer"
+          }
+        }
+      },
+      "MempoolStartResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "NftUTXOsResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "code": {
+            "type": "integer"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "address": {
+                "type": "string"
+              },
+              "utxos": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/NftUTXO"
+                }
+              },
+              "total": {
+                "type": "integer"
+              },
+              "cursor": {
+                "type": "integer"
+              },
+              "nextCursor": {
+                "type": "integer"
+              },
+              "size": {
+                "type": "integer"
+              }
+            }
+          },
+          "time": {
+            "type": "integer"
+          },
+          "cost": {
+            "type": "integer"
+          }
+        }
+      },
+      "NftUTXO": {
+        "type": "object",
+        "properties": {
+          "codeHash": {
+            "type": "string"
+          },
+          "genesis": {
+            "type": "string"
+          },
+          "tokenId": {
+            "type": "string"
+          },
+          "txid": {
+            "type": "string"
+          },
+          "index": {
+            "type": "string"
+          },
+          "metaId": {
+            "type": "string"
+          }
+        }
+      },
+      "NftGenesisResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "code": {
+            "type": "integer"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "codeHash": {
+                "type": "string"
+              },
+              "genesis": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "symbol": {
+                "type": "string"
+              },
+              "totalSupply": {
+                "type": "string"
+              }
+            }
+          },
+          "time": {
+            "type": "integer"
+          },
+          "cost": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  }
+}

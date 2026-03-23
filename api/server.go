@@ -65,6 +65,8 @@ func (s *Server) setupRoutes() {
 	s.Router.GET("/mempool/rebuild", s.rebuildMempool)
 	// Reindex blocks API
 	s.Router.GET("/blocks/reindex", s.reindexBlocks)
+	// Rich list: addresses sorted by balance descending
+	s.Router.GET("/rich-list", s.getRichList)
 }
 
 func (s *Server) StartMempoolCore() error {
@@ -265,6 +267,37 @@ func (s *Server) reindexBlocks(c *gin.Context) {
 
 		log.Printf("Reindexing completed, processed %d blocks, from height %d to %d", blocksToProcess, startHeight, endHeight)
 	}()
+}
+
+func (s *Server) getRichList(c *gin.Context) {
+	pageStr := c.DefaultQuery("page", "1")
+	pageSizeStr := c.DefaultQuery("page_size", "50")
+	dustStr := c.DefaultQuery("dust_threshold", "0")
+
+	page, err := strconv.Atoi(pageStr)
+	if err != nil || page < 1 {
+		page = 1
+	}
+	pageSize, err := strconv.Atoi(pageSizeStr)
+	if err != nil || pageSize < 1 || pageSize > 500 {
+		pageSize = 50
+	}
+	dustThreshold, err := strconv.ParseInt(dustStr, 10, 64)
+	if err != nil || dustThreshold < 0 {
+		dustThreshold = 0
+	}
+
+	list, total, err := s.indexer.GetRichList(page, pageSize, dustThreshold)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+		"list":      list,
+	})
 }
 
 func (s *Server) getBalance(c *gin.Context) {

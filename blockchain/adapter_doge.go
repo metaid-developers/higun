@@ -220,6 +220,30 @@ func (a *DOGEAdapter) GetBlock(height int64) (*indexer.Block, error) {
 		return nil, err
 	}
 
+	// 2. 先用 verbosity=1 获取区块元数据（含 size 和 txid 列表），代价远小于拉取原始区块
+	verbose1, err := a.getBlockVerbose1(hashStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get block verbose1 at height %d: %w", height, err)
+	}
+
+	// 3. 根据区块大小决定处理路径
+	threshold := config.GlobalConfig.LargeBlockThresholdBytes
+	if threshold <= 0 {
+		threshold = 200 * 1024 * 1024 // 默认 200MB
+	}
+
+	if verbose1.Size >= threshold {
+		// === 大块路径（DOGE 实际上块上限 1MB，此分支在正常情况下不会触发）===
+		log.Printf("[LargeBlock-DOGE] Height %d: size=%d bytes (%.1f MB) >= threshold=%d bytes, switching to tx-by-tx mode (%d txs)",
+			height, verbose1.Size, float64(verbose1.Size)/1024/1024, threshold, len(verbose1.Tx))
+		result, err := a.getBlockByTxHashes(verbose1, int(height))
+		if err != nil {
+			return nil, fmt.Errorf("large block tx-by-tx fetch failed at height %d: %w", height, err)
+		}
+		return result, nil
+	}
+
+	// === 普通路径：拉取原始 hex 并整体反序列化（与改造前完全一致）===
 	hash, _ := chainhash.NewHashFromStr(hashStr)
 
 	// 2. 获取原始区块数据
@@ -278,6 +302,88 @@ func (a *DOGEAdapter) GetBlock(height int64) (*indexer.Block, error) {
 
 	// 4. 转换为统一的索引器格式
 	return a.convertToIndexerBlock(msgBlock, int(height), hashStr, msgBlock.Header.Timestamp.Unix())
+}
+
+// dogeBlockVerbose1Result 是 getblock <hash> 1 的简化响应结构
+type dogeBlockVerbose1Result struct {
+	Hash   string   `json:"hash"`
+	Height int64    `json:"height"`
+	Size   int64    `json:"size"` // 序列化后的字节数
+	Time   int64    `json:"time"`
+	Tx     []string `json:"tx"` // 仅 txid 列表
+}
+
+// getBlockVerbose1 以 verbosity=1 拉取区块元数据（轻量，仅含 txid 列表和 size）
+func (a *DOGEAdapter) getBlockVerbose1(hashStr string) (*dogeBlockVerbose1Result, error) {
+	resp, err := a.rpcClient.RawRequest("getblock", []json.RawMessage{
+		json.RawMessage(fmt.Sprintf("\"%s\"", hashStr)),
+		json.RawMessage("1"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	var result dogeBlockVerbose1Result
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// getBlockByTxHashes 大块专用路径：并发逐笔拉取 TX，避免 OOM
+// 要求节点已开启 txindex=1
+func (a *DOGEAdapter) getBlockByTxHashes(verbose1 *dogeBlockVerbose1Result, height int) (*indexer.Block, error) {
+	txids := verbose1.Tx
+	txCount := len(txids)
+
+	workers := config.GlobalConfig.LargeBlockFetchWorkers
+	if workers <= 0 {
+		workers = 20
+	}
+	if workers > txCount {
+		workers = txCount
+	}
+
+	allBlock := &indexer.Block{
+		Height:     height,
+		BlockHash:  verbose1.Hash,
+		UtxoData:   make(map[string][]string),
+		IncomeData: make(map[string][]string),
+		SpendData:  make(map[string][]string),
+	}
+
+	results := make([]*indexer.Transaction, txCount)
+	errCh := make(chan error, 1)
+	sem := make(chan struct{}, workers)
+
+	var wg sync.WaitGroup
+	for i, txid := range txids {
+		wg.Add(1)
+		go func(idx int, id string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			tx, err := a.GetTransaction(id)
+			if err != nil {
+				select {
+				case errCh <- fmt.Errorf("getrawtransaction %s: %w", id, err):
+				default:
+				}
+				return
+			}
+			results[idx] = tx
+		}(i, txid)
+	}
+	wg.Wait()
+
+	select {
+	case err := <-errCh:
+		return nil, err
+	default:
+	}
+
+	allBlock.Transactions = results
+	return allBlock, nil
 }
 
 // GetTransaction 获取单笔交易

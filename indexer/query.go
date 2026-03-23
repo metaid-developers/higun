@@ -1,7 +1,11 @@
 package indexer
 
 import (
+	"container/heap"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -688,4 +692,192 @@ func (i *UTXOIndexer) GetIncomeStore() *storage.PebbleStore {
 // GetSpendStore 获取spendStore用于查询花费UTXO
 func (i *UTXOIndexer) GetSpendStore() *storage.PebbleStore {
 	return i.spendStore
+}
+
+// AddressBalance holds the confirmed balance for one address.
+type AddressBalance struct {
+	Address        string  `json:"address"`
+	BalanceSatoshi int64   `json:"balance_satoshi"`
+	Balance        float64 `json:"balance"`
+	UTXOCount      int64   `json:"utxo_count"`
+}
+
+// richHeap is a min-heap of AddressBalance ordered by BalanceSatoshi (ascending).
+// It keeps only the top-N entries during streaming iteration.
+type richHeap []AddressBalance
+
+func (h richHeap) Len() int            { return len(h) }
+func (h richHeap) Less(i, j int) bool  { return h[i].BalanceSatoshi < h[j].BalanceSatoshi }
+func (h richHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
+func (h *richHeap) Push(x interface{}) { *h = append(*h, x.(AddressBalance)) }
+func (h *richHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
+
+const richListDBKey = "rich_list_cache"
+const richListLimit = 500
+
+// GetRichList reads the rich list from the database and returns a paginated slice.
+// The database is updated every 4 hours by the background goroutine started via
+// StartRichListWarmup. If no data exists yet, an empty list is returned.
+func (i *UTXOIndexer) GetRichList(page, pageSize int, dustThreshold int64) (list []AddressBalance, total int64, err error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 50
+	}
+
+	data, dbErr := i.metaStore.Get([]byte(richListDBKey))
+	if dbErr != nil {
+		if errors.Is(dbErr, storage.ErrNotFound) {
+			list = []AddressBalance{}
+			return
+		}
+		err = fmt.Errorf("read rich list from db: %w", dbErr)
+		return
+	}
+
+	var all []AddressBalance
+	if err = json.Unmarshal(data, &all); err != nil {
+		err = fmt.Errorf("parse rich list: %w", err)
+		return
+	}
+
+	total = int64(len(all))
+	offset := (page - 1) * pageSize
+	if offset >= int(total) {
+		list = []AddressBalance{}
+		return
+	}
+	end := offset + pageSize
+	if end > int(total) {
+		end = int(total)
+	}
+	list = all[offset:end]
+	return
+}
+
+// runRichListScan performs a full streaming scan, builds the top-500 list, and
+// writes the result as JSON to the metaStore. It never blocks callers.
+func (i *UTXOIndexer) runRichListScan() error {
+	h := &richHeap{}
+	heap.Init(h)
+
+	// Reuse maps across iterations to avoid per-address allocations.
+	spendMap := make(map[string]struct{}, 128)
+	seen := make(map[string]struct{}, 128)
+
+	scanErr := i.addressStore.IterateShards(func(rawKey, rawValue []byte) bool {
+		clear(spendMap)
+		clear(seen)
+
+		spendData, _, _ := i.spendStore.GetWithShard(rawKey)
+		if len(spendData) > 0 {
+			for _, spendTx := range strings.Split(string(spendData), ",") {
+				if spendTx == "" {
+					continue
+				}
+				arr := strings.Split(spendTx, "@")
+				if len(arr) >= 1 && arr[0] != "" {
+					spendMap[arr[0]] = struct{}{}
+				}
+			}
+		}
+
+		var income, spend, utxoCount int64
+		for _, part := range strings.Split(string(rawValue), ",") {
+			fields := strings.Split(part, "@")
+			if len(fields) < 3 {
+				continue
+			}
+			key := fields[0] + ":" + fields[1]
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+			in, e := strconv.ParseInt(fields[2], 10, 64)
+			if e != nil {
+				continue
+			}
+			utxoCount++
+			income += in
+			if _, spent := spendMap[key]; spent {
+				spend += in
+			}
+		}
+		balance := income - spend
+		if balance <= 0 {
+			return true
+		}
+
+		entry := AddressBalance{
+			Address:        string(rawKey),
+			BalanceSatoshi: balance,
+			Balance:        float64(balance) / 1e8,
+			UTXOCount:      utxoCount - int64(len(spendMap)),
+		}
+		if h.Len() < richListLimit {
+			heap.Push(h, entry)
+		} else if balance > (*h)[0].BalanceSatoshi {
+			heap.Pop(h)
+			heap.Push(h, entry)
+		}
+		return true
+	})
+	if scanErr != nil {
+		return fmt.Errorf("iterate income store: %w", scanErr)
+	}
+
+	// Drain heap into descending slice.
+	result := make([]AddressBalance, h.Len())
+	for idx := h.Len() - 1; idx >= 0; idx-- {
+		result[idx] = heap.Pop(h).(AddressBalance)
+	}
+
+	data, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("marshal rich list: %w", err)
+	}
+	return i.metaStore.Set([]byte(richListDBKey), data)
+}
+
+// StartRichListWarmup starts a background goroutine that runs an initial scan
+// immediately and then repeats every 4 hours. If a scan is still running when
+// the timer fires, that tick is skipped. The goroutine exits when stopCh is closed.
+func (i *UTXOIndexer) StartRichListWarmup(stopCh <-chan struct{}) {
+	go func() {
+		i.doRichListRefresh()
+
+		ticker := time.NewTicker(4 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopCh:
+				log.Println("[RichList] Stopped")
+				return
+			case <-ticker.C:
+				i.doRichListRefresh()
+			}
+		}
+	}()
+}
+
+// doRichListRefresh runs a scan if none is already in progress; otherwise skips.
+func (i *UTXOIndexer) doRichListRefresh() {
+	if !i.richListRefreshing.CompareAndSwap(0, 1) {
+		log.Println("[RichList] Scan still in progress, skipping")
+		return
+	}
+	defer i.richListRefreshing.Store(0)
+	log.Println("[RichList] Scan started")
+	if err := i.runRichListScan(); err != nil {
+		log.Printf("[RichList] Scan error: %v", err)
+	} else {
+		log.Println("[RichList] Scan complete, DB updated")
+	}
 }

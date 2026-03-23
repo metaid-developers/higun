@@ -477,6 +477,29 @@ func (s *PebbleStore) ScanRecentUTXOs(maxCount int, sampleRate int) (map[string]
 	wg.Wait()
 	return result, nil
 }
+
+// IterateShards calls fn(key, value) for every record across all shards sequentially.
+// fn receives read-only slices valid only for the duration of the call; copy if needed.
+// Iteration stops early if fn returns false.
+func (s *PebbleStore) IterateShards(fn func(key, value []byte) bool) error {
+	for _, db := range s.shards {
+		iter, err := db.NewIter(nil)
+		if err != nil {
+			return err
+		}
+		for iter.First(); iter.Valid(); iter.Next() {
+			if !fn(iter.Key(), iter.Value()) {
+				iter.Close()
+				return nil
+			}
+		}
+		if err := iter.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *PebbleStore) BulkQueryMapConcurrent(keys []string, concurrency int) (map[string][]byte, error) {
 	if concurrency <= 0 {
 		concurrency = runtime.NumCPU()

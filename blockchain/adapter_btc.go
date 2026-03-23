@@ -8,6 +8,7 @@ import (
 	"log"
 	"runtime"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/btcsuite/btcd/chaincfg"
@@ -113,8 +114,34 @@ func (a *BTCAdapter) GetBlock(height int64) (*indexer.Block, error) {
 
 	hash, _ := chainhash.NewHashFromStr(hashStr)
 
-	// 2. 获取原始区块数据
+	// 2. 先用 verbosity=1 获取区块元数据（含 size 和 txid 列表），代价远小于拉取原始区块
 	t2 := time.Now()
+	verbose1, err := a.getBlockVerbose1(hash.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get block verbose1 at height %d: %w", height, err)
+	}
+	getVerbose1Time := time.Since(t2)
+
+	// 3. 根据区块大小决定处理路径
+	threshold := config.GlobalConfig.LargeBlockThresholdBytes
+	if threshold <= 0 {
+		threshold = 200 * 1024 * 1024 // 默认 200MB
+	}
+
+	if verbose1.Size >= threshold {
+		// === 大块路径：逐笔 TX 拉取，避免将整块大 hex 字符串装入内存 ===
+		log.Printf("[LargeBlock] Height %d: size=%d bytes (%.1f MB) >= threshold=%d bytes, switching to tx-by-tx mode (%d txs)",
+			height, verbose1.Size, float64(verbose1.Size)/1024/1024, threshold, len(verbose1.Tx))
+		result, err := a.getBlockByTxHashes(verbose1, int(height))
+		if err != nil {
+			return nil, fmt.Errorf("large block tx-by-tx fetch failed at height %d: %w", height, err)
+		}
+		log.Printf("[LargeBlock] Height %d: completed tx-by-tx fetch in %.2fs", height, time.Since(t2).Seconds())
+		return result, nil
+	}
+
+	// === 普通路径：拉取原始 hex 并整体反序列化（与改造前完全一致）===
+	t3 := time.Now()
 	resp, err := a.rpcClient.RawRequest("getblock", []json.RawMessage{
 		json.RawMessage(fmt.Sprintf("\"%s\"", hash.String())),
 		json.RawMessage("0"),
@@ -122,15 +149,15 @@ func (a *BTCAdapter) GetBlock(height int64) (*indexer.Block, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get raw block: %w", err)
 	}
-	getRawBlockTime := time.Since(t2)
+	getRawBlockTime := time.Since(t3)
 
 	var blockHex string
 	if err := json.Unmarshal(resp, &blockHex); err != nil {
 		return nil, err
 	}
 
-	// 3. 解析区块
-	t3 := time.Now()
+	// 4. 解析区块
+	t4 := time.Now()
 	blockBytes, err := hex.DecodeString(blockHex)
 	if err != nil {
 		return nil, err
@@ -140,21 +167,103 @@ func (a *BTCAdapter) GetBlock(height int64) (*indexer.Block, error) {
 	if err := msgBlock.Deserialize(bytes.NewReader(blockBytes)); err != nil {
 		return nil, err
 	}
-	deserializeTime := time.Since(t3)
+	deserializeTime := time.Since(t4)
 
-	// 4. 转换为统一的索引器格式
-	t4 := time.Now()
+	// 5. 转换为统一的索引器格式
+	t5 := time.Now()
 	result, err := a.convertToIndexerBlock(msgBlock, int(height), hashStr, msgBlock.Header.Timestamp.Unix())
-	convertTime := time.Since(t4)
+	convertTime := time.Since(t5)
 
 	// 只在RPC总耗时超过0.2秒时打印警告
-	totalRpcTime := getHashTime + getRawBlockTime + deserializeTime + convertTime
+	totalRpcTime := getHashTime + getVerbose1Time + getRawBlockTime + deserializeTime + convertTime
 	if totalRpcTime.Seconds() > 0.2 {
-		log.Printf("[Perf-RPC-Slow] Height %d: GetHash=%.3fs, GetRawBlock=%.3fs, Deserialize=%.3fs, Convert=%.3fs",
-			height, getHashTime.Seconds(), getRawBlockTime.Seconds(), deserializeTime.Seconds(), convertTime.Seconds())
+		log.Printf("[Perf-RPC-Slow] Height %d: GetHash=%.3fs, GetVerbose1=%.3fs, GetRawBlock=%.3fs, Deserialize=%.3fs, Convert=%.3fs",
+			height, getHashTime.Seconds(), getVerbose1Time.Seconds(), getRawBlockTime.Seconds(), deserializeTime.Seconds(), convertTime.Seconds())
 	}
 
 	return result, err
+}
+
+// btcBlockVerbose1Result 是 getblock <hash> 1 的简化响应结构
+type btcBlockVerbose1Result struct {
+	Hash   string   `json:"hash"`
+	Height int64    `json:"height"`
+	Size   int64    `json:"size"` // 序列化后的字节数（含 witness）
+	Time   int64    `json:"time"`
+	Tx     []string `json:"tx"` // 仅 txid 列表
+}
+
+// getBlockVerbose1 以 verbosity=1 拉取区块元数据（轻量，仅含 txid 列表和 size）
+func (a *BTCAdapter) getBlockVerbose1(hashStr string) (*btcBlockVerbose1Result, error) {
+	resp, err := a.rpcClient.RawRequest("getblock", []json.RawMessage{
+		json.RawMessage(fmt.Sprintf("\"%s\"", hashStr)),
+		json.RawMessage("1"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	var result btcBlockVerbose1Result
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// getBlockByTxHashes 大块专用路径：并发逐笔拉取 TX，避免 OOM
+// 要求节点已开启 txindex=1
+func (a *BTCAdapter) getBlockByTxHashes(verbose1 *btcBlockVerbose1Result, height int) (*indexer.Block, error) {
+	txids := verbose1.Tx
+	txCount := len(txids)
+
+	workers := config.GlobalConfig.LargeBlockFetchWorkers
+	if workers <= 0 {
+		workers = 20
+	}
+	if workers > txCount {
+		workers = txCount
+	}
+
+	allBlock := &indexer.Block{
+		Height:     height,
+		BlockHash:  verbose1.Hash,
+		UtxoData:   make(map[string][]string),
+		IncomeData: make(map[string][]string),
+		SpendData:  make(map[string][]string),
+	}
+
+	results := make([]*indexer.Transaction, txCount)
+	errCh := make(chan error, 1)
+	sem := make(chan struct{}, workers)
+
+	var wg sync.WaitGroup
+	for i, txid := range txids {
+		wg.Add(1)
+		go func(idx int, id string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			tx, err := a.GetTransaction(id)
+			if err != nil {
+				select {
+				case errCh <- fmt.Errorf("getrawtransaction %s: %w", id, err):
+				default:
+				}
+				return
+			}
+			results[idx] = tx
+		}(i, txid)
+	}
+	wg.Wait()
+
+	select {
+	case err := <-errCh:
+		return nil, err
+	default:
+	}
+
+	allBlock.Transactions = results
+	return allBlock, nil
 }
 
 // GetTransaction 获取单笔交易
