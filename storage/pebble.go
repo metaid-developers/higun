@@ -220,19 +220,19 @@ func NewPebbleStore(params config.IndexerParams, dataDir string, storeType Store
 				Compression: pebble.NoCompression,
 			},
 		},
-		// 优化内存表大小 - 增大可减少刷盘频率
-		MemTableSize:                128 << 20, // 128MB (从64MB增加)
-		MemTableStopWritesThreshold: 6,         // 允许更多内存表
-		// Block cache - 降低到20MB，主要缓存Index/Filter blocks
-		// 6 shard × 3 stores × 20MB = 360MB，节省内存优先给UTXO缓存
-		Cache: pebble.NewCache(20 << 20), // 20MB per shard
-		// 增大 L0 文件数量阈值，减少压缩触发频率
-		L0CompactionThreshold: 10, // 从8增加到10
-		L0StopWritesThreshold: 32, // 从24增加到32
-		// 增加并发压缩数提高吞吐
-		MaxConcurrentCompactions: func() int { return 6 }, // 从4增加到6
-		// 增加最大打开文件数
-		MaxOpenFiles: 10000, // 默认1000
+		// 每个 shard 32MB MemTable，最多 2 个并存 = 64MB/shard
+		// 2 shards × 3 stores × 64MB = 384MB 上限，远低于原来的 4.6GB
+		MemTableSize:                32 << 20, // 32MB
+		MemTableStopWritesThreshold: 2,        // 最多 2 个 MemTable
+		// Block cache 10MB/shard，2 shard × 3 stores × 10MB = 60MB
+		Cache: pebble.NewCache(10 << 20), // 10MB per shard
+		// L0 压缩阈值
+		L0CompactionThreshold: 8,
+		L0StopWritesThreshold: 24,
+		// 并发压缩数
+		MaxConcurrentCompactions: func() int { return 4 },
+		// 最大打开文件数
+		MaxOpenFiles: 5000,
 	}
 	store := &PebbleStore{
 		shards: make([]*pebble.DB, shardCount),

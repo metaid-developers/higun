@@ -116,7 +116,7 @@ func (idx *UTXOIndexer) HandleReorg(fromHeight, toHeight int64) error {
 			Timestamp:    time.Now().Unix(),
 			ErrorMessage: err.Error(),
 		}
-		go syslogs.InsertErrLog(errMsg)
+		syslogs.InsertErrLog(errMsg)
 	}
 	if err := syslogs.UpdateReorgStatus(fromHeight, 1); err != nil {
 		return fmt.Errorf("failed to update reorg status: %w", err)

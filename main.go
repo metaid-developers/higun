@@ -160,8 +160,6 @@ func main() {
 	log.Println("Starting block synchronization...")
 	//log.Println("Note: Mempool not automatically started, please use API '/mempool/start' to start mempool after block sync is complete")
 	go bcClient.CheckReorg(idx)
-	// Start background rich list cache warm-up
-	idx.StartRichListWarmup(stopCh)
 	// Use goroutine to start block synchronization, no longer automatically start mempool
 	go func() {
 		for {
@@ -171,7 +169,7 @@ func main() {
 					Timestamp:    time.Now().Unix(),
 					ErrorMessage: err.Error(),
 				}
-				go syslogs.InsertErrLog(errMsg)
+				syslogs.InsertErrLog(errMsg)
 				log.Printf("Block synchronization failed: %v, retrying in 15 seconds...", err)
 				select {
 				case <-stopCh:

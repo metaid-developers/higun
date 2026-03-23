@@ -121,6 +121,9 @@ func createTables() error {
 }
 
 func InsertIndexerLog(log IndexerLog) error {
+	if db == nil {
+		return nil
+	}
 	query := `INSERT INTO IndexerLog (Height, BlockHash, ExpectedInTxCount, ActualInTxCount, ExpectedOutTxCount, ActualOutTxCount, CompletionTime, BlockTime, TxNum, AddressNum, NewAddressNum, Reorg) 
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := db.Exec(query, log.Height, log.BlockHash, log.ExpectedInTxCount, log.ActualInTxCount, log.ExpectedOutTxCount, log.ActualOutTxCount, log.CompletionTime, log.BlockTime, log.TxNum, log.AddressNum, log.NewAddressNum, log.Reorg)
@@ -139,6 +142,9 @@ func UpdateIndexerReorg(fromHeight int, toHeight int) error {
 	return nil
 }
 func InsertErrLog(log ErrLog) error {
+	if db == nil {
+		return nil
+	}
 	query := `INSERT INTO ErrLog (ErrType, Height, BlockHash, Timestamp, ErrorMessage) 
 		VALUES (?, ?, ?, ?, ?)`
 	_, err := db.Exec(query, log.ErrType, log.Height, log.BlockHash, log.Timestamp, log.ErrorMessage)
@@ -149,6 +155,9 @@ func InsertErrLog(log ErrLog) error {
 }
 
 func InsertReorgLog(log ReorgLog) error {
+	if db == nil {
+		return nil
+	}
 	query := `INSERT INTO ReorgLog (Height, EndHeight, BlockHash, NewBlockHash, ReorgSize, Timestamp, Status) 
 		VALUES (?, ?, ?, ?, ?, ?, ?)`
 	_, err := db.Exec(query, log.Height, log.EndHeight, log.BlockHash, log.NewBlockHash, log.ReorgSize, log.Timestamp, log.Status)
