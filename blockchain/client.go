@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -145,6 +146,33 @@ func (c *Client) GetRawTransaction(txHashStr string) (*btcutil.Tx, error) {
 		return nil, fmt.Errorf("failed to get transaction %s: %w", txHash, err)
 	}
 	return tx, nil
+}
+
+func (c *Client) SendRawTransaction(rawTx string) (string, error) {
+	rawTx = strings.TrimSpace(rawTx)
+	if rawTx == "" {
+		return "", fmt.Errorf("raw transaction is required")
+	}
+	if c == nil || c.rpcClient == nil {
+		return "", fmt.Errorf("rpc client not initialized")
+	}
+
+	txBytes, err := hex.DecodeString(rawTx)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode raw transaction hex: %w", err)
+	}
+
+	msgTx, err := DeserializeTransaction(txBytes)
+	if err != nil {
+		return "", fmt.Errorf("failed to deserialize raw transaction: %w", err)
+	}
+
+	txHash, err := c.rpcClient.SendRawTransaction(msgTx, true)
+	if err != nil {
+		return "", err
+	}
+
+	return txHash.String(), nil
 }
 
 func (c *Client) Shutdown() {

@@ -59,6 +59,7 @@ func (s *Server) setupRoutes() {
 	s.Router.GET("/utxos", s.getUTXOs)
 	s.Router.GET("/utxos/spend", s.getSpendUTXOs)
 	s.Router.GET("/utxo/db", s.getUtxoByTx)
+	s.Router.POST("/btc/broadcast", s.broadcastTx)
 	s.Router.POST("/tx/btc-utxo/check", s.checkUtxo)
 	s.Router.POST("/utxo/check", s.checkUtxo)
 	s.Router.GET("/mempool/utxos", s.getMempoolUTXOs)
@@ -72,6 +73,30 @@ func (s *Server) setupRoutes() {
 	s.Router.GET("/blocks/reindex", s.reindexBlocks)
 	// Rich list: addresses sorted by balance descending
 	s.Router.GET("/rich-list", s.getRichList)
+}
+
+type broadcastTxReq struct {
+	RawTx string `json:"rawTx"`
+}
+
+func (s *Server) broadcastTx(c *gin.Context) {
+	var req broadcastTxReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -2001, "msg": "request parameter error"})
+		return
+	}
+	if s.bcClient == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": -2002, "msg": "blockchain client not configured"})
+		return
+	}
+
+	txid, err := s.bcClient.SendRawTransaction(req.RawTx)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -2003, "msg": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 2000, "msg": txid})
 }
 
 func (s *Server) StartMempoolCore() error {
