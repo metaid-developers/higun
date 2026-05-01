@@ -26,15 +26,18 @@ type BlockchainClient interface {
 }
 
 type UTXOIndexer struct {
-	utxoStore        *storage.PebbleStore
-	addressStore     *storage.PebbleStore
-	spendStore       *storage.PebbleStore
-	metaStore        *storage.MetaStore
-	mu               sync.RWMutex
-	bar              *progressbar.ProgressBar
-	params           config.IndexerParams
-	mempoolManager   MempoolManager   // Use interface type instead of interface{}
-	blockchainClient BlockchainClient // RPC client for warmup
+	utxoStore               *storage.PebbleStore
+	addressStore            *storage.PebbleStore
+	spendStore              *storage.PebbleStore
+	balanceStore            *storage.PebbleStore
+	rankStore               *storage.PebbleStore
+	metaStore               *storage.MetaStore
+	bootstrapBalanceIndexFn func() error
+	mu                      sync.RWMutex
+	bar                     *progressbar.ProgressBar
+	params                  config.IndexerParams
+	mempoolManager          MempoolManager   // Use interface type instead of interface{}
+	blockchainClient        BlockchainClient // RPC client for warmup
 	// Memory UTXO cache for performance
 	memUTXO         sync.Map // key: "txid:index" -> value: "address@amount@blockTime"
 	memUTXOCount    int64    // Number of UTXOs in memory
@@ -45,6 +48,10 @@ type UTXOIndexer struct {
 	// richListRefreshing is 1 while a background scan is running; 0 otherwise.
 	// Used to ensure only one scan runs at a time (CAS, never blocks callers).
 	richListRefreshing atomic.Int32
+
+	// Error and diagnostics counters
+	memParseErrors     int64 // count of memUTXO parse failures (Fix 3)
+	unresolvedDBPoints int64 // count of dbQueryPoints not found in dbResult (Fix 4)
 }
 
 var workers = 1
@@ -64,6 +71,11 @@ func NewUTXOIndexer(params config.IndexerParams, utxoStore, addressStore *storag
 		spendStore:      spendStore,
 		memUTXOMaxCount: maxCount,
 	}
+}
+
+func (i *UTXOIndexer) SetBalanceStores(balanceStore, rankStore *storage.PebbleStore) {
+	i.balanceStore = balanceStore
+	i.rankStore = rankStore
 }
 
 // func (i *UTXOIndexer) optimizeConcurrency(dataSize int) int {
@@ -186,8 +198,10 @@ func (i *UTXOIndexer) PrintMemoryStats() {
 	if totalQueries > 0 {
 		hitRate = float64(atomic.LoadInt64(&i.memHits)) * 100 / float64(totalQueries)
 	}
-	log.Printf("[MemUTXO Stats] Hit rate: %.1f%% (mem:%d, db:%d), Cache size: %d UTXOs",
-		hitRate, atomic.LoadInt64(&i.memHits), atomic.LoadInt64(&i.dbHits), atomic.LoadInt64(&i.memUTXOCount))
+	log.Printf("[MemUTXO Stats] Hit rate: %.1f%% (mem:%d, db:%d), Cache size: %d UTXOs, Unresolved: %d, MemParseErr: %d",
+		hitRate, atomic.LoadInt64(&i.memHits), atomic.LoadInt64(&i.dbHits),
+		atomic.LoadInt64(&i.memUTXOCount), atomic.LoadInt64(&i.unresolvedDBPoints),
+		atomic.LoadInt64(&i.memParseErrors))
 }
 
 func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight bool, blockTimeStr string) (inCnt int, outCnt int, addressNum int, err error) {
@@ -206,10 +220,14 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 
 	// Since batch processing is already done in the convertBlock stage, complex large block processing logic is no longer needed here
 	// Directly process transactions in the current batch
+	var balanceDeltas map[string]confirmedBalanceDelta
+	if i.balanceStore != nil {
+		balanceDeltas = make(map[string]confirmedBalanceDelta)
+	}
 
 	// Phase 1: Index all outputs
 	tIncome := time.Now()
-	if cnt, addressCnt, err := i.indexIncome(block, allBlock, blockTimeStr); err != nil {
+	if cnt, addressCnt, err := i.indexIncome(block, allBlock, blockTimeStr, balanceDeltas); err != nil {
 		errMsg := syslogs.ErrLog{
 			Height:       block.Height,
 			BlockHash:    block.BlockHash,
@@ -231,7 +249,7 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 	//log.Println("==>i.processSpend")
 	// Phase 2: Process all inputs
 	tSpend := time.Now()
-	if cnt, err := i.processSpend(block, allBlock, blockTimeStr); err != nil {
+	if cnt, err := i.processSpend(block, allBlock, blockTimeStr, balanceDeltas); err != nil {
 		errMsg := syslogs.ErrLog{
 			Height:       block.Height,
 			BlockHash:    block.BlockHash,
@@ -245,6 +263,18 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 		inCnt = cnt
 	}
 	spendTime := time.Since(tSpend)
+
+	if err := i.updateConfirmedBalanceIndexes(balanceDeltas); err != nil {
+		errMsg := syslogs.ErrLog{
+			Height:       block.Height,
+			BlockHash:    block.BlockHash,
+			ErrType:      "ApplyBalanceIndexDeltas",
+			Timestamp:    time.Now().Unix(),
+			ErrorMessage: err.Error(),
+		}
+		go syslogs.InsertErrLog(errMsg)
+		return 0, 0, 0, fmt.Errorf("failed to update confirmed balance indexes: %w", err)
+	}
 	// After phase 2 is complete, release transaction data
 	block.Transactions = nil
 
@@ -268,6 +298,12 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 			i.utxoStore.Sync()
 			i.addressStore.Sync()
 			i.spendStore.Sync()
+			if i.balanceStore != nil {
+				i.balanceStore.Sync()
+			}
+			if i.rankStore != nil {
+				i.rankStore.Sync()
+			}
 		}
 
 		// 更新索引高度（每个区块都更新，依赖WAL保护）
@@ -402,7 +438,7 @@ func SaveBlockFile(fileType string, allBlock *Block, isPart bool) {
 		allBlock.SpendPartIndex += 1
 	}
 }
-func (i *UTXOIndexer) indexIncome(block *Block, allBlock *Block, blockTimeStr string) (cnt int, addressNum int, err error) {
+func (i *UTXOIndexer) indexIncome(block *Block, allBlock *Block, blockTimeStr string, balanceDeltas map[string]confirmedBalanceDelta) (cnt int, addressNum int, err error) {
 	// Set reasonable batch size based on memory conditions
 	//const batchSize = 1000
 	workers = config.GlobalConfig.Workers
@@ -439,6 +475,7 @@ func (i *UTXOIndexer) indexIncome(block *Block, allBlock *Block, blockTimeStr st
 					out.Amount = "0"
 				}
 				inCnt++
+				amount, amountErr := strconv.ParseInt(out.Amount, 10, 64)
 				v := common.ConcatBytesOptimized([]string{out.Address, out.Amount, blockTimeStr}, "@")
 				txMap[tx.ID] = append(txMap[tx.ID], v)
 				// 只在BlockFilesEnabled时才累积到allBlock（避免内存泄露）
@@ -451,6 +488,9 @@ func (i *UTXOIndexer) indexIncome(block *Block, allBlock *Block, blockTimeStr st
 					addressIncomeMap[out.Address] = make([]string, 0, 4) // Assume most addresses have less than 4 outputs
 				}
 				if out.Address != "errAddress" {
+					if amountErr == nil {
+						addConfirmedBalanceDelta(balanceDeltas, out.Address, amount, 1)
+					}
 					v := common.ConcatBytesOptimized([]string{tx.ID, strconv.Itoa(x), out.Amount, blockTimeStr}, "@")
 					addressIncomeMap[out.Address] = append(addressIncomeMap[out.Address], v)
 					// 只在BlockFilesEnabled时才累积到allBlock（避免内存泄露）
@@ -622,7 +662,28 @@ func (i *UTXOIndexer) indexIncome(block *Block, allBlock *Block, blockTimeStr st
 	return cnt, addressNum, nil
 }
 
-func (i *UTXOIndexer) processSpend(block *Block, allBlock *Block, blockTimeStr string) (cnt int, err error) {
+func parseMemUTXODetail(value string) (detail storage.UTXODetail, ok bool) {
+	firstAt := strings.IndexByte(value, '@')
+	if firstAt <= 0 {
+		return storage.UTXODetail{}, false
+	}
+	secondAt := strings.IndexByte(value[firstAt+1:], '@')
+	if secondAt < 0 {
+		return storage.UTXODetail{}, false
+	}
+	amountStart := firstAt + 1
+	amountEnd := amountStart + secondAt
+	amount, err := strconv.ParseInt(value[amountStart:amountEnd], 10, 64)
+	if err != nil {
+		return storage.UTXODetail{}, false
+	}
+	return storage.UTXODetail{
+		Address: value[:firstAt],
+		Amount:  amount,
+	}, true
+}
+
+func (i *UTXOIndexer) processSpend(block *Block, allBlock *Block, blockTimeStr string, balanceDeltas map[string]confirmedBalanceDelta) (cnt int, err error) {
 	workers = config.GlobalConfig.Workers
 	batchSize = config.GlobalConfig.BatchSize
 	blockHeight := int64(block.Height)
@@ -676,12 +737,17 @@ func (i *UTXOIndexer) processSpend(block *Block, allBlock *Block, blockTimeStr s
 				// Memory hit
 				atomic.AddInt64(&i.memHits, 1)
 				valueStr := value.(string)
-
-				// 优化：使用strings.IndexByte替代循环查找
-				atIdx := strings.IndexByte(valueStr, '@')
-				if atIdx > 0 {
-					address := valueStr[:atIdx]
-					addressResult[address] = append(addressResult[address], point)
+				if detail, ok := parseMemUTXODetail(valueStr); ok {
+					addressResult[detail.Address] = append(addressResult[detail.Address], point)
+					addConfirmedBalanceDelta(balanceDeltas, detail.Address, -detail.Amount, -1)
+				} else {
+					// Parse failure: log, count, fallback to DB query
+					atomic.AddInt64(&i.memParseErrors, 1)
+					if count := atomic.LoadInt64(&i.memParseErrors); count%100 == 1 {
+						log.Printf("[MemUTXO] Parse failure (count=%d): point=%s value=%q",
+							count, point, valueStr)
+					}
+					dbQueryPoints = append(dbQueryPoints, point)
 				}
 
 				// Delete from memory after spending
@@ -697,10 +763,10 @@ func (i *UTXOIndexer) processSpend(block *Block, allBlock *Block, blockTimeStr s
 		tMemQuery := time.Since(tQuery)
 
 		// Step 2: Query database for missed points
-		var dbResult map[string][]string
+		var dbResult map[string]storage.UTXODetail
 		tDbQuery := time.Now()
 		if len(dbQueryPoints) > 0 {
-			dbResult, err = i.utxoStore.QueryUTXOAddresses2(&dbQueryPoints)
+			dbResult, err = i.utxoStore.QueryUTXODetails(&dbQueryPoints)
 			if err != nil {
 				errMsg := syslogs.ErrLog{
 					Height:       block.Height,
@@ -713,8 +779,30 @@ func (i *UTXOIndexer) processSpend(block *Block, allBlock *Block, blockTimeStr s
 				return 0, fmt.Errorf("failed to query UTXO addresses: %w", err)
 			}
 			// Merge database results
-			for k, v := range dbResult {
-				addressResult[k] = append(addressResult[k], v...)
+			for outpoint, detail := range dbResult {
+				addressResult[detail.Address] = append(addressResult[detail.Address], outpoint)
+				addConfirmedBalanceDelta(balanceDeltas, detail.Address, -detail.Amount, -1)
+			}
+			// Detect outpoints not found in dbResult
+			unresolvedCount := len(dbQueryPoints) - len(dbResult)
+			if unresolvedCount > 0 {
+				atomic.AddInt64(&i.unresolvedDBPoints, int64(unresolvedCount))
+				total := atomic.LoadInt64(&i.unresolvedDBPoints)
+				if unresolvedCount > 10 || total%100 == 0 {
+					log.Printf("[UTXO] WARNING: %d unresolved dbQueryPoints at height=%d (total=%d)",
+						unresolvedCount, block.Height, total)
+					foundPoints := make(map[string]bool, len(dbResult))
+					for op := range dbResult {
+						foundPoints[op] = true
+					}
+					sampleCount := 0
+					for _, op := range dbQueryPoints {
+						if !foundPoints[op] && sampleCount < 3 {
+							log.Printf("[UTXO]   Example unresolved: %s", op)
+							sampleCount++
+						}
+					}
+				}
 			}
 		}
 		dbQueryTime := time.Since(tDbQuery)

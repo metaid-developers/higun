@@ -1,16 +1,20 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cespare/xxhash/v2"
@@ -26,6 +30,8 @@ const (
 	DBDirIncome                      = "income"
 	DBDirSpend                       = "spend"
 	DBDirMeta                        = "meta"
+	DBDirAddressBalance              = "address_balance"
+	DBDirBalanceRank                 = "balance_rank"
 	DBDirContractFTUTXO              = "contract_ft_utxo"
 	DBDirAddressFTIncome             = "address_ft_income"
 	DBDirAddressFTSpend              = "address_ft_spend"
@@ -91,8 +97,22 @@ func (l *customLogger) Fatalf(format string, args ...interface{}) {}
 func (l *customLogger) Errorf(format string, args ...interface{}) {}
 
 type PebbleStore struct {
-	shards []*pebble.DB
-	mu     sync.RWMutex
+	shards      []*pebble.DB
+	mu          sync.RWMutex
+	dbGetErrors atomic.Int64
+}
+
+func (s *PebbleStore) DBGetErrorCount() int64 {
+	return s.dbGetErrors.Load()
+}
+
+type PebbleOpenOptions struct {
+	ReadOnly                    bool
+	CacheSizeBytes              int64
+	MemTableSizeBytes           uint64
+	MemTableStopWritesThreshold int
+	MaxConcurrentCompactions    int
+	MaxOpenFiles                int
 }
 
 type MetaStore struct {
@@ -137,6 +157,8 @@ const (
 	StoreTypeIncome
 	StoreTypeSpend
 	StoreTypeMeta
+	StoreTypeAddressBalance
+	StoreTypeBalanceRank
 	StoreTypeContractFTUTXO
 	StoreTypeAddressFTIncome
 	StoreTypeAddressFTSpend
@@ -202,38 +224,25 @@ func NewMetaStore(dataDir string) (*MetaStore, error) {
 
 // Configure database options
 
+const (
+	defaultPebbleMemTableSizeBytes                 = 128 << 20
+	defaultPebbleCacheSizeBytes              int64 = 20 << 20
+	defaultPebbleMemTableStopWritesThreshold       = 6
+	defaultPebbleMaxConcurrentCompactions          = 6
+	defaultPebbleMaxOpenFiles                      = 10000
+)
+
 func NewPebbleStore(params config.IndexerParams, dataDir string, storeType StoreType, shardCount int) (*PebbleStore, error) {
+	return NewPebbleStoreWithOptions(params, dataDir, storeType, shardCount, PebbleOpenOptions{})
+}
+
+func NewPebbleStoreWithOptions(params config.IndexerParams, dataDir string, storeType StoreType, shardCount int, openOpts PebbleOpenOptions) (*PebbleStore, error) {
 	if shardCount <= 0 {
 		shardCount = defaultShardCount
 	}
-	// dbOptions := &pebble.Options{
-	// 	Cache:        pebble.NewCache(int64(params.DBCacheSizeMB) * 1024 * 1024),
-	// 	MemTableSize: uint64(params.MemTableSizeMB) * 1024 * 1024,
-	// 	WALMinSyncInterval: func() time.Duration {
-	// 		return time.Duration(params.WALSizeMB) * time.Millisecond
-	// 	},
-	// }
-	dbOptions := &pebble.Options{
-		//Logger: noopLogger,
-		Levels: []pebble.LevelOptions{
-			{
-				Compression: pebble.NoCompression,
-			},
-		},
-		// 优化内存表大小 - 增大可减少刷盘频率
-		MemTableSize:                128 << 20, // 128MB (从64MB增加)
-		MemTableStopWritesThreshold: 6,         // 允许更多内存表
-		// Block cache - 降低到20MB，主要缓存Index/Filter blocks
-		// 6 shard × 3 stores × 20MB = 360MB，节省内存优先给UTXO缓存
-		Cache: pebble.NewCache(20 << 20), // 20MB per shard
-		// 增大 L0 文件数量阈值，减少压缩触发频率
-		L0CompactionThreshold: 10, // 从8增加到10
-		L0StopWritesThreshold: 32, // 从24增加到32
-		// 增加并发压缩数提高吞吐
-		MaxConcurrentCompactions: func() int { return 6 }, // 从4增加到6
-		// 增加最大打开文件数
-		MaxOpenFiles: 10000, // 默认1000
-	}
+	dbOptions, cache := newPebbleDBOptions(params, openOpts)
+	defer cache.Unref()
+
 	store := &PebbleStore{
 		shards: make([]*pebble.DB, shardCount),
 	}
@@ -247,6 +256,10 @@ func NewPebbleStore(params config.IndexerParams, dataDir string, storeType Store
 			dbPath = filepath.Join(dataDir, DBDirIncome, fmt.Sprintf("shard_%d", i))
 		case StoreTypeSpend:
 			dbPath = filepath.Join(dataDir, DBDirSpend, fmt.Sprintf("shard_%d", i))
+		case StoreTypeAddressBalance:
+			dbPath = filepath.Join(dataDir, DBDirAddressBalance, fmt.Sprintf("shard_%d", i))
+		case StoreTypeBalanceRank:
+			dbPath = filepath.Join(dataDir, DBDirBalanceRank, fmt.Sprintf("shard_%d", i))
 		case StoreTypeContractFTUTXO:
 			dbPath = filepath.Join(dataDir, DBDirContractFTUTXO, fmt.Sprintf("shard_%d", i))
 		case StoreTypeAddressFTIncome:
@@ -346,12 +359,139 @@ func NewPebbleStore(params config.IndexerParams, dataDir string, storeType Store
 
 		db, err := pebble.Open(dbPath, dbOptions)
 		if err != nil {
+			_ = store.Close()
 			return nil, fmt.Errorf("failed to open shard %d: %w", i, err)
 		}
 		store.shards[i] = db
 	}
 
 	return store, nil
+}
+
+// dedupMerger implements pebble.ValueMerger for deduplicating comma-separated
+// segments in UTXO/spend/income values. The value format is:
+//
+//	,seg1,seg2,seg3,...
+//
+// On Finish, all buffered values are parsed, deduplicated, and reassembled.
+// The merger name is "pebble.concatenate" for backward compatibility with
+// existing databases created with the default Pebble merger.
+type dedupMerger struct {
+	buf []byte
+}
+
+func (m *dedupMerger) MergeNewer(value []byte) error {
+	m.buf = append(m.buf, value...)
+	return nil
+}
+
+func (m *dedupMerger) MergeOlder(value []byte) error {
+	buf := make([]byte, len(m.buf)+len(value))
+	copy(buf, value)
+	copy(buf[len(value):], m.buf)
+	m.buf = buf
+	return nil
+}
+
+func (m *dedupMerger) Finish(includesBase bool) ([]byte, io.Closer, error) {
+	if len(m.buf) == 0 {
+		return nil, nil, nil
+	}
+	s := string(m.buf)
+	segments := make(map[string]struct{}, 16)
+
+	// Parse comma-separated segments, handling optional leading comma
+	start := 0
+	if len(s) > 0 && s[0] == ',' {
+		start = 1
+	}
+	for start <= len(s) {
+		end := strings.IndexByte(s[start:], ',')
+		if end < 0 {
+			seg := s[start:]
+			if seg != "" {
+				segments[seg] = struct{}{}
+			}
+			break
+		}
+		seg := s[start : start+end]
+		if seg != "" {
+			segments[seg] = struct{}{}
+		}
+		start += end + 1
+	}
+
+	if len(segments) == 0 {
+		return nil, nil, nil
+	}
+
+	// Sort for deterministic output
+	sorted := make([]string, 0, len(segments))
+	for seg := range segments {
+		sorted = append(sorted, seg)
+	}
+	sort.Strings(sorted)
+
+	result := "," + strings.Join(sorted, ",")
+	return []byte(result), nil, nil
+}
+
+// dedupMergerFactory is the pebble.Merger used by all stores.
+var dedupMergerFactory = &pebble.Merger{
+	Name: "pebble.concatenate",
+	Merge: func(key, value []byte) (pebble.ValueMerger, error) {
+		m := &dedupMerger{}
+		if len(value) > 0 {
+			m.buf = append(m.buf, value...)
+		}
+		return m, nil
+	},
+}
+
+func newPebbleDBOptions(_ config.IndexerParams, openOpts PebbleOpenOptions) (*pebble.Options, *pebble.Cache) {
+	cacheSizeBytes := openOpts.CacheSizeBytes
+	if cacheSizeBytes <= 0 {
+		cacheSizeBytes = defaultPebbleCacheSizeBytes
+	}
+
+	memTableSizeBytes := openOpts.MemTableSizeBytes
+	if memTableSizeBytes == 0 {
+		memTableSizeBytes = defaultPebbleMemTableSizeBytes
+	}
+
+	memTableStopWritesThreshold := openOpts.MemTableStopWritesThreshold
+	if memTableStopWritesThreshold <= 0 {
+		memTableStopWritesThreshold = defaultPebbleMemTableStopWritesThreshold
+	}
+
+	maxConcurrentCompactions := openOpts.MaxConcurrentCompactions
+	if maxConcurrentCompactions <= 0 {
+		maxConcurrentCompactions = defaultPebbleMaxConcurrentCompactions
+	}
+
+	maxOpenFiles := openOpts.MaxOpenFiles
+	if maxOpenFiles <= 0 {
+		maxOpenFiles = defaultPebbleMaxOpenFiles
+	}
+
+	cache := pebble.NewCache(cacheSizeBytes)
+	dbOptions := &pebble.Options{
+		Levels: []pebble.LevelOptions{
+			{
+				Compression: pebble.NoCompression,
+			},
+		},
+		MemTableSize:                memTableSizeBytes,
+		MemTableStopWritesThreshold: memTableStopWritesThreshold,
+		Cache:                       cache,
+		L0CompactionThreshold:       10,
+		L0StopWritesThreshold:       32,
+		MaxConcurrentCompactions:    func() int { return maxConcurrentCompactions },
+		MaxOpenFiles:                maxOpenFiles,
+		ReadOnly:                    openOpts.ReadOnly,
+		Merger:                      dedupMergerFactory,
+	}
+	return dbOptions, cache
 }
 
 func (s *PebbleStore) getShard(key string) *pebble.DB {
@@ -588,6 +728,9 @@ func (s *PebbleStore) Close() error {
 
 	var err error
 	for _, db := range s.shards {
+		if db == nil {
+			continue
+		}
 		if closeErr := db.Close(); closeErr != nil && err == nil {
 			err = closeErr
 		}
@@ -617,15 +760,43 @@ func (b *Batch) Set(key, value []byte) error {
 	return b.batches[shardIdx].Set(key, value, nil)
 }
 
+func (b *Batch) Delete(key []byte) error {
+	db := b.store.getShard(string(key))
+	shardIdx := b.store.getShardIndex(string(key))
+
+	if b.batches[shardIdx] == nil {
+		b.batches[shardIdx] = db.NewBatch()
+	}
+	return b.batches[shardIdx].Delete(key, nil)
+}
+
 func (b *Batch) Commit() error {
+	var commitErr error
 	for _, batch := range b.batches {
 		if batch != nil {
-			if err := batch.Commit(nil); err != nil {
-				return err
+			if err := batch.Commit(nil); err != nil && commitErr == nil {
+				commitErr = err
 			}
 		}
 	}
-	return nil
+	if closeErr := b.Close(); closeErr != nil && commitErr == nil {
+		commitErr = closeErr
+	}
+	return commitErr
+}
+
+func (b *Batch) Close() error {
+	var err error
+	for idx, batch := range b.batches {
+		if batch == nil {
+			continue
+		}
+		if closeErr := batch.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+		b.batches[idx] = nil
+	}
+	return err
 }
 
 func (s *PebbleStore) getShardIndex(key string) int {
@@ -1480,6 +1651,14 @@ func (s *PebbleStore) QueryUTXOAddresses2(outpoints *[]string) (map[string][]str
 					for txid := range jobsCh {
 						value, closer, err := db.Get([]byte(txid))
 						if err != nil {
+							if err == pebble.ErrNotFound {
+								continue
+							}
+							s.dbGetErrors.Add(1)
+							if count := s.dbGetErrors.Load(); count%1000 == 1 {
+								log.Printf("[QueryUTXOAddresses2] db.Get error (count=%d): txid=%s shard=%d err=%v",
+									count, txid, shardIdx, err)
+							}
 							continue
 						}
 						// Copy value before closer
@@ -1582,6 +1761,178 @@ func (s *PebbleStore) QueryUTXOAddresses2(outpoints *[]string) (map[string][]str
 	return results, nil
 }
 
+type UTXODetail struct {
+	Address string
+	Amount  int64
+}
+
+func (s *PebbleStore) QueryUTXODetails(outpoints *[]string) (map[string]UTXODetail, error) {
+	if len(*outpoints) == 0 {
+		return make(map[string]UTXODetail), nil
+	}
+
+	type outpointInfo struct {
+		txid     string
+		indexStr string
+		fullKey  string
+	}
+
+	txidMap := make(map[string][]outpointInfo)
+	for _, op := range *outpoints {
+		colonIdx := strings.LastIndexByte(op, ':')
+		if colonIdx == -1 {
+			continue
+		}
+		txid := op[:colonIdx]
+		indexStr := op[colonIdx+1:]
+		txidMap[txid] = append(txidMap[txid], outpointInfo{
+			txid:     txid,
+			indexStr: indexStr,
+			fullKey:  op,
+		})
+	}
+
+	uniqueTxids := make([]string, 0, len(txidMap))
+	for txid := range txidMap {
+		uniqueTxids = append(uniqueTxids, txid)
+	}
+
+	shardBatches := make(map[int][]string)
+	for _, txid := range uniqueTxids {
+		shardIdx := s.getShardIndex(txid)
+		shardBatches[shardIdx] = append(shardBatches[shardIdx], txid)
+	}
+
+	numCacheShards := 64
+	type cacheShardType struct {
+		mu   sync.Mutex
+		data map[string][]byte
+	}
+	cacheShards := make([]cacheShardType, numCacheShards)
+	for i := range cacheShards {
+		cacheShards[i].data = make(map[string][]byte)
+	}
+
+	var wg sync.WaitGroup
+	for shardIdx, txids := range shardBatches {
+		wg.Add(1)
+		go func(shardIdx int, txids []string) {
+			defer wg.Done()
+			db := s.shards[shardIdx]
+			miniConcurrency := 64
+			jobsCh := make(chan string, len(txids))
+			var miniWg sync.WaitGroup
+
+			for i := 0; i < miniConcurrency; i++ {
+				miniWg.Add(1)
+				go func() {
+					defer miniWg.Done()
+					localCache := make(map[string][]byte, 32)
+					for txid := range jobsCh {
+						value, closer, err := db.Get([]byte(txid))
+						if err != nil {
+							if err == pebble.ErrNotFound {
+								continue
+							}
+							s.dbGetErrors.Add(1)
+							if count := s.dbGetErrors.Load(); count%1000 == 1 {
+								log.Printf("[QueryUTXODetails] db.Get error (count=%d): txid=%s shard=%d err=%v",
+									count, txid, shardIdx, err)
+							}
+							continue
+						}
+						valueCopy := append([]byte(nil), value...)
+						closer.Close()
+
+						localCache[txid] = valueCopy
+						if len(localCache) >= 32 {
+							for k, v := range localCache {
+								cacheIdx := xxhash.Sum64String(k) % uint64(numCacheShards)
+								cacheShards[cacheIdx].mu.Lock()
+								cacheShards[cacheIdx].data[k] = v
+								cacheShards[cacheIdx].mu.Unlock()
+							}
+							localCache = make(map[string][]byte, 32)
+						}
+					}
+
+					for k, v := range localCache {
+						cacheIdx := xxhash.Sum64String(k) % uint64(numCacheShards)
+						cacheShards[cacheIdx].mu.Lock()
+						cacheShards[cacheIdx].data[k] = v
+						cacheShards[cacheIdx].mu.Unlock()
+					}
+				}()
+			}
+
+			for _, txid := range txids {
+				jobsCh <- txid
+			}
+			close(jobsCh)
+			miniWg.Wait()
+		}(shardIdx, txids)
+	}
+
+	wg.Wait()
+
+	numResultShards := 32
+	type resultShard struct {
+		mu   sync.Mutex
+		data map[string]UTXODetail
+	}
+	resultShards := make([]resultShard, numResultShards)
+	for i := range resultShards {
+		resultShards[i].data = make(map[string]UTXODetail)
+	}
+
+	concurrency := runtime.NumCPU() * 4
+	jobsCh := make(chan outpointInfo, len(*outpoints))
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for info := range jobsCh {
+				cacheIdx := xxhash.Sum64String(info.txid) % uint64(numCacheShards)
+				cacheShards[cacheIdx].mu.Lock()
+				value, exists := cacheShards[cacheIdx].data[info.txid]
+				cacheShards[cacheIdx].mu.Unlock()
+				if !exists {
+					continue
+				}
+
+				detail, ok := extractUTXODetailFromValue(value, info.indexStr)
+				if !ok || detail.Address == "" {
+					continue
+				}
+
+				shardIdx := xxhash.Sum64String(info.fullKey) % uint64(numResultShards)
+				resultShards[shardIdx].mu.Lock()
+				resultShards[shardIdx].data[info.fullKey] = detail
+				resultShards[shardIdx].mu.Unlock()
+			}
+		}()
+	}
+
+	for _, outpointList := range txidMap {
+		for _, info := range outpointList {
+			jobsCh <- info
+		}
+	}
+	close(jobsCh)
+
+	wg.Wait()
+
+	results := make(map[string]UTXODetail)
+	for i := range resultShards {
+		for k, v := range resultShards[i].data {
+			results[k] = v
+		}
+	}
+
+	return results, nil
+}
+
 func extractAddressFromValue(value []byte, indexStr string) string {
 	index, err := strconv.Atoi(indexStr)
 	if err != nil {
@@ -1609,6 +1960,58 @@ func extractAddressFromValue(value []byte, indexStr string) string {
 		return parseAddress(value[start:])
 	}
 	return ""
+}
+
+func extractUTXODetailFromValue(value []byte, indexStr string) (UTXODetail, bool) {
+	index, err := strconv.Atoi(indexStr)
+	if err != nil {
+		return UTXODetail{}, false
+	}
+
+	start := 0
+	if len(value) > 0 && value[0] == ',' {
+		start = 1
+	}
+
+	current := 0
+	for i := start; i < len(value); i++ {
+		if value[i] == ',' {
+			if current == index {
+				return parseUTXODetail(value[start:i])
+			}
+			current++
+			start = i + 1
+		}
+	}
+
+	if current == index {
+		return parseUTXODetail(value[start:])
+	}
+	return UTXODetail{}, false
+}
+
+func parseUTXODetail(segment []byte) (UTXODetail, bool) {
+	firstAt := bytes.IndexByte(segment, '@')
+	if firstAt <= 0 {
+		return UTXODetail{}, false
+	}
+
+	secondAt := bytes.IndexByte(segment[firstAt+1:], '@')
+	if secondAt < 0 {
+		return UTXODetail{}, false
+	}
+
+	amountStart := firstAt + 1
+	amountEnd := amountStart + secondAt
+	amount, err := strconv.ParseInt(string(segment[amountStart:amountEnd]), 10, 64)
+	if err != nil {
+		return UTXODetail{}, false
+	}
+
+	return UTXODetail{
+		Address: string(segment[:firstAt]),
+		Amount:  amount,
+	}, true
 }
 
 func parseAddress(segment []byte) string {
