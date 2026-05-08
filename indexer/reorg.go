@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/metaid/utxo_indexer/syslogs"
@@ -47,6 +48,50 @@ func (idx *UTXOIndexer) DeleteDataByBlockHeight(blockHeight int64) error {
 	return nil
 }
 func (idx *UTXOIndexer) DoDelete(block *Block) error {
+	var balanceDeltas map[string]confirmedBalanceDelta
+	if idx.balanceStore != nil {
+		balanceDeltas = make(map[string]confirmedBalanceDelta)
+		for address, incomes := range block.IncomeData {
+			for _, income := range incomes {
+				parts := strings.Split(income, "@")
+				if len(parts) < 3 {
+					continue
+				}
+				amount, err := strconv.ParseInt(parts[2], 10, 64)
+				if err != nil {
+					continue
+				}
+				addConfirmedBalanceDelta(balanceDeltas, address, -amount, -1)
+			}
+		}
+
+		seenOutpoints := make(map[string]struct{})
+		spendOutpoints := make([]string, 0)
+		for _, spends := range block.SpendData {
+			for _, spend := range spends {
+				parts := strings.Split(spend, "@")
+				if len(parts) < 1 || parts[0] == "" {
+					continue
+				}
+				outpoint := parts[0]
+				if _, exists := seenOutpoints[outpoint]; exists {
+					continue
+				}
+				seenOutpoints[outpoint] = struct{}{}
+				spendOutpoints = append(spendOutpoints, outpoint)
+			}
+		}
+		if len(spendOutpoints) > 0 {
+			spentDetails, err := idx.utxoStore.QueryUTXODetails(&spendOutpoints)
+			if err != nil {
+				return fmt.Errorf("query spent outpoint details for rollback: %w", err)
+			}
+			for _, detail := range spentDetails {
+				addConfirmedBalanceDelta(balanceDeltas, detail.Address, detail.Amount, 1)
+			}
+		}
+	}
+
 	//fmt.Println("--------UTXO Data-------")
 	const batchSize = 10000
 	utxos := make([]string, 0, batchSize)
@@ -87,7 +132,7 @@ func (idx *UTXOIndexer) DoDelete(block *Block) error {
 	for k, v := range block.SpendData {
 		spends[k] = v
 		if len(spends) >= batchSize {
-			if err := idx.addressStore.BatchDeleteByMap(spends); err != nil {
+			if err := idx.spendStore.BatchDeleteByMap(spends); err != nil {
 				return fmt.Errorf("batch delete failed: %w", err)
 			}
 			spends = make(map[string][]string, batchSize)
@@ -95,9 +140,13 @@ func (idx *UTXOIndexer) DoDelete(block *Block) error {
 	}
 	// 删除剩余未满 batch 的
 	if len(spends) > 0 {
-		if err := idx.addressStore.BatchDeleteByMap(spends); err != nil {
+		if err := idx.spendStore.BatchDeleteByMap(spends); err != nil {
 			return fmt.Errorf("batch delete failed: %w", err)
 		}
+	}
+
+	if err := idx.updateConfirmedBalanceIndexes(balanceDeltas); err != nil {
+		return fmt.Errorf("rollback balance indexes failed: %w", err)
 	}
 	return nil
 }

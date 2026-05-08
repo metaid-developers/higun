@@ -11,11 +11,13 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/chaincfg"
 	//"github.com/btcsuite/btcd/wire"
 	"github.com/bitcoinsv/bsvd/wire"
 	"github.com/cockroachdb/pebble"
 	"github.com/metaid/utxo_indexer/blockchain"
 	"github.com/metaid/utxo_indexer/config"
+	"github.com/metaid/utxo_indexer/mempool"
 	"github.com/metaid/utxo_indexer/storage"
 	"github.com/metaid/utxo_indexer/syslogs"
 )
@@ -348,4 +350,62 @@ func TestErrLog(t *testing.T) {
 	}
 	err := syslogs.InsertErrLog(errMsg)
 	fmt.Println(err)
+}
+
+func TestNewMempoolManagerIfConfiguredSkipsWhenZMQDisabled(t *testing.T) {
+	oldConstructor := newMempoolManagerFn
+	t.Cleanup(func() {
+		newMempoolManagerFn = oldConstructor
+	})
+
+	constructorCalled := false
+	newMempoolManagerFn = func(_ string, _ *storage.PebbleStore, _ *chaincfg.Params, _ []string) *mempool.MempoolManager {
+		constructorCalled = true
+		return &mempool.MempoolManager{}
+	}
+
+	cfg := &config.Config{
+		DataDir:    t.TempDir(),
+		ZMQAddress: []string{"", "   "},
+	}
+
+	manager := newMempoolManagerIfConfigured(cfg, nil, nil)
+	if manager != nil {
+		t.Fatal("expected nil mempool manager when zmq_address is disabled")
+	}
+	if constructorCalled {
+		t.Fatal("expected mempool constructor to be skipped when zmq_address is disabled")
+	}
+}
+
+func TestNewMempoolManagerIfConfiguredBuildsWhenZMQConfigured(t *testing.T) {
+	oldConstructor := newMempoolManagerFn
+	t.Cleanup(func() {
+		newMempoolManagerFn = oldConstructor
+	})
+
+	called := false
+	newMempoolManagerFn = func(basePath string, store *storage.PebbleStore, chainCfg *chaincfg.Params, addrs []string) *mempool.MempoolManager {
+		called = true
+		if basePath == "" {
+			t.Fatal("expected basePath to be passed to mempool constructor")
+		}
+		if len(addrs) != 1 || addrs[0] != "tcp://127.0.0.1:28332" {
+			t.Fatalf("unexpected zmq addresses: %#v", addrs)
+		}
+		return &mempool.MempoolManager{}
+	}
+
+	cfg := &config.Config{
+		DataDir:    t.TempDir(),
+		ZMQAddress: []string{"tcp://127.0.0.1:28332"},
+	}
+
+	manager := newMempoolManagerIfConfigured(cfg, nil, nil)
+	if manager == nil {
+		t.Fatal("expected mempool manager when zmq_address is configured")
+	}
+	if !called {
+		t.Fatal("expected mempool constructor to be called when zmq_address is configured")
+	}
 }

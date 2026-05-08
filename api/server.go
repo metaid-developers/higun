@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -25,6 +26,10 @@ type Server struct {
 	metaStore   *storage.MetaStore
 	stopCh      <-chan struct{}
 	mempoolInit bool // Whether the mempool has been initialized
+
+	startMempoolFn        func() error
+	initializeMempoolFn   func()
+	startMempoolCleanerFn func()
 }
 
 func NewServer(indexer *indexer.UTXOIndexer, metaStore *storage.MetaStore, stopCh <-chan struct{}) *Server {
@@ -70,7 +75,7 @@ func (s *Server) setupRoutes() {
 }
 
 func (s *Server) StartMempoolCore() error {
-	if s.mempoolMgr == nil || s.bcClient == nil {
+	if s.startMempoolFn == nil && (s.mempoolMgr == nil || s.bcClient == nil) {
 		return fmt.Errorf("Mempool manager or blockchain client not configured")
 	}
 	if s.mempoolInit {
@@ -78,16 +83,29 @@ func (s *Server) StartMempoolCore() error {
 	}
 
 	log.Println("Starting ZMQ and mempool listener via API...")
-	if err := s.mempoolMgr.Start(); err != nil {
+	startFn := s.startMempoolFn
+	if startFn == nil {
+		startFn = s.mempoolMgr.Start
+	}
+	if err := startFn(); err != nil {
 		return fmt.Errorf("Failed to start mempool: %w", err)
 	}
 	s.mempoolInit = true
 	log.Println("Mempool manager started via API, listening for new transactions...")
+	cleanerFn := s.startMempoolCleanerFn
+	if cleanerFn == nil {
+		cleanerFn = s.startMempoolCleaner
+	}
+	go cleanerFn()
 
 	// Initialize mempool data (load existing mempool transactions)
 	go func() {
 		log.Println("Starting to initialize mempool data...")
-		s.mempoolMgr.InitializeMempool(s.bcClient)
+		if s.initializeMempoolFn != nil {
+			s.initializeMempoolFn()
+		} else {
+			s.mempoolMgr.InitializeMempool(s.bcClient)
+		}
 		log.Println("Mempool data initialization complete")
 	}()
 	return nil
@@ -271,16 +289,27 @@ func (s *Server) reindexBlocks(c *gin.Context) {
 
 func (s *Server) getRichList(c *gin.Context) {
 	pageStr := c.DefaultQuery("page", "1")
-	pageSizeStr := c.DefaultQuery("page_size", "50")
+	pageSizeStr := c.Query("page_size")
+	limitStr := c.Query("limit")
 	dustStr := c.DefaultQuery("dust_threshold", "0")
+
+	if limitStr != "" {
+		pageSizeStr = limitStr
+	}
+	if pageSizeStr == "" {
+		pageSizeStr = "100"
+	}
 
 	page, err := strconv.Atoi(pageStr)
 	if err != nil || page < 1 {
 		page = 1
 	}
 	pageSize, err := strconv.Atoi(pageSizeStr)
-	if err != nil || pageSize < 1 || pageSize > 500 {
-		pageSize = 50
+	if err != nil || pageSize < 1 {
+		pageSize = 100
+	}
+	if pageSize > 100 {
+		pageSize = 100
 	}
 	dustThreshold, err := strconv.ParseInt(dustStr, 10, 64)
 	if err != nil || dustThreshold < 0 {
@@ -289,6 +318,10 @@ func (s *Server) getRichList(c *gin.Context) {
 
 	list, total, err := s.indexer.GetRichList(page, pageSize, dustThreshold)
 	if err != nil {
+		if errors.Is(err, indexer.ErrRichListCacheNotReady) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

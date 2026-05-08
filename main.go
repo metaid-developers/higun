@@ -7,9 +7,11 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/metaid/utxo_indexer/api"
 	"github.com/metaid/utxo_indexer/blockchain"
 	"github.com/metaid/utxo_indexer/common"
@@ -22,6 +24,7 @@ import (
 )
 
 var ApiServer *api.Server
+var newMempoolManagerFn = mempool.NewMempoolManager
 
 // blockchainClientWrapper wraps blockchain.Client to implement indexer.BlockchainClient
 type blockchainClientWrapper struct {
@@ -44,11 +47,11 @@ func main() {
 	if cfg.BlockInfoIndexer {
 		startBlockIndexer(cfg)
 	}
-	utxoStore, addressStore, spendStore, bcClient, metaStore, mempoolMgr, err := initDb(cfg, params)
+	utxoStore, addressStore, spendStore, balanceStore, rankStore, bcClient, metaStore, mempoolMgr, err := initDb(cfg, params)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
-	defer closeDb(utxoStore, addressStore, spendStore, bcClient, metaStore, mempoolMgr)
+	defer closeDb(utxoStore, addressStore, spendStore, balanceStore, rankStore, bcClient, metaStore, mempoolMgr)
 	// Verify last indexed height
 	lastHeight, err := metaStore.Get([]byte("last_indexed_height"))
 	if err == nil {
@@ -90,6 +93,7 @@ func main() {
 	}()
 
 	idx := indexer.NewUTXOIndexer(params, utxoStore, addressStore, metaStore, spendStore)
+	idx.SetBalanceStores(balanceStore, rankStore)
 
 	// Set blockchain client for cache warmup
 	if bcClient != nil {
@@ -107,6 +111,13 @@ func main() {
 	log.Printf("Starting UTXO indexer API, port: %s", cfg.APIPort)
 	blockindexer.SetRouter(ApiServer)
 	go ApiServer.Start(fmt.Sprintf(":%s", cfg.APIPort))
+	balanceIndexReady := false
+	if readyBytes, readyErr := metaStore.Get([]byte("balance_index_ready")); readyErr == nil && string(readyBytes) == "1" {
+		balanceIndexReady = true
+	}
+	if !balanceIndexReady {
+		log.Println("[BalanceIndex] Automatic bootstrap disabled on startup; /balance will use history fallback and /rich-list remains unavailable until a manual rebuild is performed")
+	}
 	// Get current blockchain height
 	var bestHeight int
 	//for {
@@ -160,8 +171,7 @@ func main() {
 	log.Println("Starting block synchronization...")
 	//log.Println("Note: Mempool not automatically started, please use API '/mempool/start' to start mempool after block sync is complete")
 	go bcClient.CheckReorg(idx)
-	// Start background rich list cache warm-up
-	idx.StartRichListWarmup(stopCh)
+	log.Println("[RichList] Using balance_rank index mode; periodic full-scan warmup disabled")
 	// Use goroutine to start block synchronization, no longer automatically start mempool
 	go func() {
 		for {
@@ -224,6 +234,31 @@ func firstSyncCompleted() {
 	log.Println("Mempool core started successfully")
 }
 
+func configuredZMQAddresses(addresses []string) []string {
+	filtered := make([]string, 0, len(addresses))
+	for _, address := range addresses {
+		address = strings.TrimSpace(address)
+		if address == "" {
+			continue
+		}
+		filtered = append(filtered, address)
+	}
+	return filtered
+}
+
+func hasConfiguredZMQAddresses(addresses []string) bool {
+	return len(configuredZMQAddresses(addresses)) > 0
+}
+
+func newMempoolManagerIfConfigured(cfg *config.Config, utxoStore *storage.PebbleStore, chainCfg *chaincfg.Params) *mempool.MempoolManager {
+	addresses := configuredZMQAddresses(cfg.ZMQAddress)
+	if len(addresses) == 0 {
+		log.Printf("Mempool disabled: no zmq_address configured")
+		return nil
+	}
+	return newMempoolManagerFn(cfg.DataDir, utxoStore, chainCfg, addresses)
+}
+
 func initConfig() (cfg *config.Config, params config.IndexerParams) {
 	// Load config
 	cfg, err := config.LoadConfig("config.yaml")
@@ -253,7 +288,7 @@ func startBlockIndexer(cfg *config.Config) {
 	go blockindexer.SaveBlockInfoData()
 	fmt.Println("blockindexer.IndexerInit success")
 }
-func initDb(cfg *config.Config, params config.IndexerParams) (utxoStore *storage.PebbleStore, addressStore *storage.PebbleStore, spendStore *storage.PebbleStore, bcClient *blockchain.Client, metaStore *storage.MetaStore, mempoolMgr *mempool.MempoolManager, err error) {
+func initDb(cfg *config.Config, params config.IndexerParams) (utxoStore *storage.PebbleStore, addressStore *storage.PebbleStore, spendStore *storage.PebbleStore, balanceStore *storage.PebbleStore, rankStore *storage.PebbleStore, bcClient *blockchain.Client, metaStore *storage.MetaStore, mempoolMgr *mempool.MempoolManager, err error) {
 	common.InitBytePool(params.BytePoolSizeKB)
 	log.Println("common.InitBytePool success")
 	storage.DbInit(params)
@@ -278,6 +313,16 @@ func initDb(cfg *config.Config, params config.IndexerParams) (utxoStore *storage
 	}
 	//defer spendStore.Close()
 	log.Println("storage.NewPebbleStore spendStore success")
+	balanceStore, err = storage.NewPebbleStore(params, cfg.DataDir, storage.StoreTypeAddressBalance, cfg.ShardCount)
+	if err != nil {
+		log.Fatalf("Failed to initialize address_balance storage: %v", err)
+	}
+	log.Println("storage.NewPebbleStore balanceStore success")
+	rankStore, err = storage.NewPebbleStore(params, cfg.DataDir, storage.StoreTypeBalanceRank, 1)
+	if err != nil {
+		log.Fatalf("Failed to initialize balance_rank storage: %v", err)
+	}
+	log.Println("storage.NewPebbleStore rankStore success")
 
 	// 使用适配器架构创建区块链客户端
 	// Create blockchain client using adapter architecture
@@ -305,17 +350,19 @@ func initDb(cfg *config.Config, params config.IndexerParams) (utxoStore *storage
 	// Create mempool manager, but don't start
 	log.Printf("Initializing mempool manager, ZMQ address: %s, network: %s", cfg.ZMQAddress, cfg.Network)
 	log.Printf("DEBUG: About to call NewMempoolManager with DataDir=%s", cfg.DataDir)
-	mempoolMgr = mempool.NewMempoolManager(cfg.DataDir, utxoStore, chainCfg, cfg.ZMQAddress)
+	mempoolMgr = newMempoolManagerIfConfigured(cfg, utxoStore, chainCfg)
 	log.Printf("DEBUG: NewMempoolManager returned, mempoolMgr is nil: %v", mempoolMgr == nil)
 	if mempoolMgr == nil {
-		log.Printf("WARNING: Failed to create mempool manager. The program will continue but mempool functionality will be disabled.")
-		log.Printf("This may be due to insufficient permissions or disk space for mempool database files in: %s", cfg.DataDir+"/mempool_*")
+		if hasConfiguredZMQAddresses(cfg.ZMQAddress) {
+			log.Printf("WARNING: Failed to create mempool manager. The program will continue but mempool functionality will be disabled.")
+			log.Printf("This may be due to insufficient permissions or disk space for mempool database files in: %s", cfg.DataDir+"/mempool_*")
+		}
 	} else {
 		log.Printf("Mempool manager initialized successfully")
 	}
 	return
 }
-func closeDb(utxoStore, addressStore, spendStore *storage.PebbleStore, bcClient *blockchain.Client, metaStore *storage.MetaStore, mempoolMgr *mempool.MempoolManager) {
+func closeDb(utxoStore, addressStore, spendStore, balanceStore, rankStore *storage.PebbleStore, bcClient *blockchain.Client, metaStore *storage.MetaStore, mempoolMgr *mempool.MempoolManager) {
 	if mempoolMgr != nil {
 		log.Println("Close mempoolMgr")
 		mempoolMgr.Stop()
@@ -331,6 +378,14 @@ func closeDb(utxoStore, addressStore, spendStore *storage.PebbleStore, bcClient 
 	if spendStore != nil {
 		log.Println("Close spendStore")
 		spendStore.Close()
+	}
+	if balanceStore != nil {
+		log.Println("Close balanceStore")
+		balanceStore.Close()
+	}
+	if rankStore != nil {
+		log.Println("Close rankStore")
+		rankStore.Close()
 	}
 	if bcClient != nil {
 		log.Println("Close bcClient")

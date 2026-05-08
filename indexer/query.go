@@ -31,6 +31,46 @@ type Balance struct {
 }
 
 func (i *UTXOIndexer) GetBalance(address string, dustThreshold int64) (balanceResult Balance, err error) {
+	mempoolIncomeData := map[string]string(nil)
+	mempoolSpendData := map[string]string(nil)
+	if i.mempoolManager != nil {
+		mempoolIncomeData, mempoolSpendData = i.mempoolManager.GetDataByAddress(address)
+	}
+
+	noMempoolActivity := len(mempoolIncomeData) == 0 && len(mempoolSpendData) == 0
+	if i.balanceStore != nil && noMempoolActivity {
+		row, rowErr := i.getAddressBalanceRow(address)
+		if rowErr == nil {
+			if i.isBalanceIndexReady() || row.Tracked {
+				confirmedBalance := row.BalanceSatoshi
+				balanceResult = Balance{
+					ConfirmedBalanceSatoshi: uint64(confirmedBalance),
+					ConfirmedBalance:        float64(confirmedBalance) / 1e8,
+					BalanceSatoshi:          uint64(confirmedBalance),
+					Balance:                 float64(confirmedBalance) / 1e8,
+					UTXOCount:               row.UTXOCount,
+				}
+				return
+			}
+		} else if !errors.Is(rowErr, storage.ErrNotFound) {
+			err = rowErr
+			return
+		}
+	}
+
+	balanceResult, err = i.getBalanceFromHistory(address, dustThreshold)
+	if err != nil {
+		return
+	}
+	if i.balanceStore != nil && noMempoolActivity && !i.isBalanceIndexReady() {
+		if cacheErr := i.putTrackedAddressBalance(address, int64(balanceResult.ConfirmedBalanceSatoshi), balanceResult.UTXOCount); cacheErr != nil {
+			log.Printf("[BalanceIndex] failed to cache confirmed balance row for %s: %v", address, cacheErr)
+		}
+	}
+	return
+}
+
+func (i *UTXOIndexer) getBalanceFromHistory(address string, dustThreshold int64) (balanceResult Balance, err error) {
 	addrKey := []byte(address)
 	spendMap := make(map[string]struct{})
 	var income int64
@@ -84,9 +124,9 @@ func (i *UTXOIndexer) GetBalance(address string, dustThreshold int64) (balanceRe
 				if in < dustThreshold {
 					unsafeFee += in
 				}
+				utxoCount += 1
 			}
 			income += in
-			utxoCount += 1
 			mempoolCheckTxMap[key] = in
 		}
 	}
@@ -175,11 +215,16 @@ func (i *UTXOIndexer) GetBalance(address string, dustThreshold int64) (balanceRe
 }
 func getUtxoFromMempoolIncomeMap(data map[string]string) (mempoolIncomeList []common.Utxo) {
 	//eg: data: map[bcrt1q2mvt4fkmp94hd2tx9ruj8g7na53kp4mqrq7n3n_927ba3f10f7003b3bc023cc12d047ec76c0984a669523407af6760afa3153b06:1_1763563228:69999577]
+	seen := make(map[string]struct{}, len(data))
 	for k, v := range data {
 		arr := strings.Split(k, "_")
 		if len(arr) < 2 {
 			continue
 		}
+		if _, exists := seen[arr[1]]; exists {
+			continue
+		}
+		seen[arr[1]] = struct{}{}
 		mempoolIncomeList = append(mempoolIncomeList, common.Utxo{
 			TxID:    arr[1],
 			Address: arr[0],
@@ -721,6 +766,25 @@ func (h *richHeap) Pop() interface{} {
 const richListDBKey = "rich_list_cache"
 const richListLimit = 500
 
+var ErrRichListCacheNotReady = errors.New("rich list cache not ready")
+
+func (i *UTXOIndexer) richListHasIndexedAddresses() bool {
+	if i.metaStore == nil {
+		return false
+	}
+
+	data, err := i.metaStore.Get([]byte("total_address_count"))
+	if err != nil {
+		return false
+	}
+
+	totalAddressCount, err := strconv.ParseUint(string(data), 10, 64)
+	if err != nil {
+		return false
+	}
+	return totalAddressCount > 0
+}
+
 // GetRichList reads the rich list from the database and returns a paginated slice.
 // The database is updated every 4 hours by the background goroutine started via
 // StartRichListWarmup. If no data exists yet, an empty list is returned.
@@ -732,9 +796,23 @@ func (i *UTXOIndexer) GetRichList(page, pageSize int, dustThreshold int64) (list
 		pageSize = 50
 	}
 
+	if i.rankStore != nil {
+		list, total, err = i.getRichListFromRankStore(page, pageSize)
+		if err == nil || errors.Is(err, ErrRichListCacheNotReady) {
+			return
+		}
+		if !errors.Is(err, storage.ErrNotFound) {
+			return
+		}
+	}
+
 	data, dbErr := i.metaStore.Get([]byte(richListDBKey))
 	if dbErr != nil {
 		if errors.Is(dbErr, storage.ErrNotFound) {
+			if i.richListHasIndexedAddresses() {
+				err = ErrRichListCacheNotReady
+				return
+			}
 			list = []AddressBalance{}
 			return
 		}
@@ -745,6 +823,10 @@ func (i *UTXOIndexer) GetRichList(page, pageSize int, dustThreshold int64) (list
 	var all []AddressBalance
 	if err = json.Unmarshal(data, &all); err != nil {
 		err = fmt.Errorf("parse rich list: %w", err)
+		return
+	}
+	if len(all) == 0 && i.richListHasIndexedAddresses() {
+		err = ErrRichListCacheNotReady
 		return
 	}
 

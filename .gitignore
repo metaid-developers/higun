@@ -12,12 +12,15 @@ higun.db-shm
 blockFiles/
 config_mvc_*.yaml
 .DS_Store
-.idea
-
-higun.db
-latest_block.txt
-higun.db-wal
-higun.db-shm
-blockFiles/
 contract_fix.go
-latest_block.txt
+
+# Compiled binaries
+api_compat_proxy
+diagnose_pebble_read
+repair_spend_store
+
+# Test data directories
+data_does_not_exist/
+
+# Claude Code internal
+.claude/

@@ -138,7 +138,7 @@ func (s *SimpleDB) GetUtxoByKey(key string) (utxoList []common.Utxo, err error) 
 		utxo := common.Utxo{}
 		// Extract address part (part after _)
 		parts := strings.Split(string(iter.Key()), "_")
-		if len(parts) == 2 {
+		if len(parts) >= 2 {
 			utxo.Address = parts[0]
 			utxo.TxID = parts[1]
 		}

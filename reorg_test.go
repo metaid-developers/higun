@@ -65,11 +65,11 @@ func TestAddBlockData(t *testing.T) {
 	// 测试添加区块数据
 	blockPart := getBlockData(100003)
 	cfg, params := initConfig()
-	utxoStore, addressStore, spendStore, bcClient, metaStore, mempoolMgr, err := initDb(cfg, params)
+	utxoStore, addressStore, spendStore, _, _, bcClient, metaStore, mempoolMgr, err := initDb(cfg, params)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
-	defer closeDb(utxoStore, addressStore, spendStore, bcClient, metaStore, mempoolMgr)
+	defer closeDb(utxoStore, addressStore, spendStore, nil, nil, bcClient, metaStore, mempoolMgr)
 	idx := indexer.NewUTXOIndexer(params, utxoStore, addressStore, metaStore, spendStore)
 	if mempoolMgr != nil {
 		idx.SetMempoolManager(mempoolMgr)
@@ -88,11 +88,11 @@ func TestAddBlockData(t *testing.T) {
 func TestDelBlockData(t *testing.T) {
 	//getall
 	cfg, params := initConfig()
-	utxoStore, addressStore, spendStore, bcClient, metaStore, mempoolMgr, err := initDb(cfg, params)
+	utxoStore, addressStore, spendStore, _, _, bcClient, metaStore, mempoolMgr, err := initDb(cfg, params)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
-	defer closeDb(utxoStore, addressStore, spendStore, bcClient, metaStore, mempoolMgr)
+	defer closeDb(utxoStore, addressStore, spendStore, nil, nil, bcClient, metaStore, mempoolMgr)
 	idx := indexer.NewUTXOIndexer(params, utxoStore, addressStore, metaStore, spendStore)
 	if mempoolMgr != nil {
 		idx.SetMempoolManager(mempoolMgr)
@@ -103,11 +103,11 @@ func TestDelBlockData(t *testing.T) {
 }
 func TestGetAllCount(t *testing.T) {
 	cfg, params := initConfig()
-	utxoStore, addressStore, spendStore, bcClient, metaStore, mempoolMgr, err := initDb(cfg, params)
+	utxoStore, addressStore, spendStore, _, _, bcClient, metaStore, mempoolMgr, err := initDb(cfg, params)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
-	defer closeDb(utxoStore, addressStore, spendStore, bcClient, metaStore, mempoolMgr)
+	defer closeDb(utxoStore, addressStore, spendStore, nil, nil, bcClient, metaStore, mempoolMgr)
 	_, utxoData, _ := utxoStore.GetAll()
 	spendKey, spendData, _ := spendStore.GetAll()
 	addressKey, addressData, _ := addressStore.GetAll()
