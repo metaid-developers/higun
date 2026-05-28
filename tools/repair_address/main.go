@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/cockroachdb/pebble"
 	"github.com/cespare/xxhash/v2"
+	"github.com/cockroachdb/pebble"
 )
 
 func main() {
@@ -37,16 +37,17 @@ func main() {
 		}
 
 		// Check if key exists
-		val, closer, err := db.Get([]byte(*address), nil)
+		val, closer, err := db.Get([]byte(*address))
 		if err == pebble.ErrNotFound {
 			log.Printf("%s: key not found, skip", storeName)
-			closer.Close()
 			db.Close()
 			continue
 		}
 		if err != nil {
 			log.Printf("WARN: %s read error: %v", storeName, err)
-			closer.Close()
+			if closer != nil {
+				closer.Close()
+			}
 			db.Close()
 			continue
 		}

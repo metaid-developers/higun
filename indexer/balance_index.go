@@ -190,41 +190,7 @@ func clearStore(store *storage.PebbleStore) error {
 	if store == nil {
 		return nil
 	}
-
-	const commitBatchSize = 5000
-	batch := store.NewBatch()
-	pending := 0
-	var callbackErr error
-
-	if err := store.IterateShards(func(key, _ []byte) bool {
-		if callbackErr != nil {
-			return false
-		}
-		keyCopy := append([]byte(nil), key...)
-		if err := batch.Delete(keyCopy); err != nil {
-			callbackErr = err
-			return false
-		}
-		pending++
-		if pending >= commitBatchSize {
-			if err := batch.Commit(); err != nil {
-				callbackErr = err
-				return false
-			}
-			batch = store.NewBatch()
-			pending = 0
-		}
-		return true
-	}); err != nil {
-		return err
-	}
-	if callbackErr != nil {
-		return callbackErr
-	}
-	if pending > 0 {
-		return batch.Commit()
-	}
-	return nil
+	return store.Clear()
 }
 
 func (i *UTXOIndexer) BootstrapConfirmedBalanceIndexesIfNeeded() error {

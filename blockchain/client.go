@@ -318,6 +318,15 @@ func (c *Client) SyncBlocks(idx *indexer.UTXOIndexer, checkInterval time.Duratio
 			time.Sleep(checkInterval)
 			continue
 		}
+		if idx.IsReindexing() {
+			log.Printf("Reindex is running, pausing normal block synchronization from height %d to %d", lastHeight+1, currentHeight)
+			select {
+			case <-stopCh:
+				return nil
+			case <-time.After(checkInterval):
+			}
+			continue
+		}
 
 		// There are new blocks to index - set progress bar
 		fmt.Printf(">>Found new blocks, indexing from height %d to %d\n", lastHeight+1, currentHeight)

@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -403,7 +402,8 @@ func (m *dedupMerger) Finish(includesBase bool) ([]byte, io.Closer, error) {
 		return nil, nil, nil
 	}
 	s := string(m.buf)
-	segments := make(map[string]struct{}, 16)
+	seen := make(map[string]struct{}, 16)
+	ordered := make([]string, 0, 16)
 
 	// Parse comma-separated segments, handling optional leading comma
 	start := 0
@@ -415,29 +415,28 @@ func (m *dedupMerger) Finish(includesBase bool) ([]byte, io.Closer, error) {
 		if end < 0 {
 			seg := s[start:]
 			if seg != "" {
-				segments[seg] = struct{}{}
+				if _, ok := seen[seg]; !ok {
+					seen[seg] = struct{}{}
+					ordered = append(ordered, seg)
+				}
 			}
 			break
 		}
 		seg := s[start : start+end]
 		if seg != "" {
-			segments[seg] = struct{}{}
+			if _, ok := seen[seg]; !ok {
+				seen[seg] = struct{}{}
+				ordered = append(ordered, seg)
+			}
 		}
 		start += end + 1
 	}
 
-	if len(segments) == 0 {
+	if len(ordered) == 0 {
 		return nil, nil, nil
 	}
 
-	// Sort for deterministic output
-	sorted := make([]string, 0, len(segments))
-	for seg := range segments {
-		sorted = append(sorted, seg)
-	}
-	sort.Strings(sorted)
-
-	result := "," + strings.Join(sorted, ",")
+	result := "," + strings.Join(ordered, ",")
 	return []byte(result), nil, nil
 }
 
@@ -1067,6 +1066,18 @@ func (s *PebbleStore) Sync() error {
 	for i, db := range s.shards {
 		if err := db.LogData(nil, pebble.Sync); err != nil {
 			return fmt.Errorf("failed to sync shard %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func (s *PebbleStore) Clear() error {
+	start := []byte{}
+	end := []byte{0xff}
+
+	for i, db := range s.shards {
+		if err := db.DeleteRange(start, end, pebble.Sync); err != nil {
+			return fmt.Errorf("failed to clear shard %d: %w", i, err)
 		}
 	}
 	return nil

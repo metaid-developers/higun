@@ -457,7 +457,7 @@ func TestIndexBlockUpdatesBalanceAndRankStores(t *testing.T) {
 		SpendData:  make(map[string][]string),
 	}
 
-	if _, _, _, err := idx.IndexBlock(block1, allBlock1, false, "1700000000"); err != nil {
+	if _, _, _, err := idx.IndexBlock(block1, allBlock1, false, "1700000000", false); err != nil {
 		t.Fatalf("IndexBlock block1: %v", err)
 	}
 
@@ -497,7 +497,7 @@ func TestIndexBlockUpdatesBalanceAndRankStores(t *testing.T) {
 		SpendData:  make(map[string][]string),
 	}
 
-	if _, _, _, err := idx.IndexBlock(block2, allBlock2, false, "1700000100"); err != nil {
+	if _, _, _, err := idx.IndexBlock(block2, allBlock2, false, "1700000100", false); err != nil {
 		t.Fatalf("IndexBlock block2: %v", err)
 	}
 
@@ -566,7 +566,7 @@ func TestIndexBlockMaintainsMaterializedBalanceRowsWhenIndexNotReady(t *testing.
 		SpendData:  make(map[string][]string),
 	}
 
-	if _, _, _, err := idx.IndexBlock(block1, allBlock1, false, "1700000000"); err != nil {
+	if _, _, _, err := idx.IndexBlock(block1, allBlock1, false, "1700000000", false); err != nil {
 		t.Fatalf("IndexBlock block1: %v", err)
 	}
 
@@ -603,7 +603,7 @@ func TestIndexBlockMaintainsMaterializedBalanceRowsWhenIndexNotReady(t *testing.
 		SpendData:  make(map[string][]string),
 	}
 
-	if _, _, _, err := idx.IndexBlock(block2, allBlock2, false, "1700000100"); err != nil {
+	if _, _, _, err := idx.IndexBlock(block2, allBlock2, false, "1700000100", false); err != nil {
 		t.Fatalf("IndexBlock block2: %v", err)
 	}
 
@@ -652,7 +652,7 @@ func TestIndexBlockRecoversBrokenBalanceIndexAndKeepsReady(t *testing.T) {
 		SpendData:  make(map[string][]string),
 	}
 
-	if _, _, _, err := idx.IndexBlock(block1, allBlock1, false, "1700000000"); err != nil {
+	if _, _, _, err := idx.IndexBlock(block1, allBlock1, false, "1700000000", false); err != nil {
 		t.Fatalf("IndexBlock block1: %v", err)
 	}
 
@@ -685,7 +685,7 @@ func TestIndexBlockRecoversBrokenBalanceIndexAndKeepsReady(t *testing.T) {
 		SpendData:  make(map[string][]string),
 	}
 
-	if _, _, _, err := idx.IndexBlock(block2, allBlock2, false, "1700000100"); err != nil {
+	if _, _, _, err := idx.IndexBlock(block2, allBlock2, false, "1700000100", false); err != nil {
 		t.Fatalf("IndexBlock block2: %v", err)
 	}
 
@@ -815,7 +815,7 @@ func TestDoDeleteRollsBackBalanceIndexes(t *testing.T) {
 		IncomeData: make(map[string][]string),
 		SpendData:  make(map[string][]string),
 	}
-	if _, _, _, err := idx.IndexBlock(block1, allBlock1, false, "1700000000"); err != nil {
+	if _, _, _, err := idx.IndexBlock(block1, allBlock1, false, "1700000000", false); err != nil {
 		t.Fatalf("IndexBlock block1: %v", err)
 	}
 
@@ -843,7 +843,7 @@ func TestDoDeleteRollsBackBalanceIndexes(t *testing.T) {
 		IncomeData: make(map[string][]string),
 		SpendData:  make(map[string][]string),
 	}
-	if _, _, _, err := idx.IndexBlock(block2, allBlock2, false, "1700000100"); err != nil {
+	if _, _, _, err := idx.IndexBlock(block2, allBlock2, false, "1700000100", false); err != nil {
 		t.Fatalf("IndexBlock block2: %v", err)
 	}
 
@@ -913,7 +913,7 @@ func TestDoDeleteMaintainsMaterializedBalanceRowsWhenIndexNotReady(t *testing.T)
 		IncomeData: make(map[string][]string),
 		SpendData:  make(map[string][]string),
 	}
-	if _, _, _, err := idx.IndexBlock(block1, allBlock1, false, "1700000000"); err != nil {
+	if _, _, _, err := idx.IndexBlock(block1, allBlock1, false, "1700000000", false); err != nil {
 		t.Fatalf("IndexBlock block1: %v", err)
 	}
 
@@ -941,7 +941,7 @@ func TestDoDeleteMaintainsMaterializedBalanceRowsWhenIndexNotReady(t *testing.T)
 		IncomeData: make(map[string][]string),
 		SpendData:  make(map[string][]string),
 	}
-	if _, _, _, err := idx.IndexBlock(block2, allBlock2, false, "1700000100"); err != nil {
+	if _, _, _, err := idx.IndexBlock(block2, allBlock2, false, "1700000100", false); err != nil {
 		t.Fatalf("IndexBlock block2: %v", err)
 	}
 

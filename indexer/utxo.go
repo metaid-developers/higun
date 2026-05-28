@@ -48,6 +48,7 @@ type UTXOIndexer struct {
 	// richListRefreshing is 1 while a background scan is running; 0 otherwise.
 	// Used to ensure only one scan runs at a time (CAS, never blocks callers).
 	richListRefreshing atomic.Int32
+	reindexing         atomic.Bool
 
 	// Error and diagnostics counters
 	memParseErrors     int64 // count of memUTXO parse failures (Fix 3)
@@ -218,25 +219,8 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 		return 0, 0, 0, fmt.Errorf("invalid block: %w", err)
 	}
 
-	// Since batch processing is already done in the convertBlock stage, complex large block processing logic is no longer needed here
-	// Directly process transactions in the current batch
-	// When reindexing, clear old (potentially corrupted) data for all addresses in this block
-	if reindex {
-		addressSet := make(map[string]struct{})
-		for _, tx := range block.Transactions {
-			for _, out := range tx.Outputs {
-				if out.Address != "" && out.Address != "errAddress" {
-					addressSet[out.Address] = struct{}{}
-				}
-			}
-		}
-		if len(addressSet) > 0 {
-			for addr := range addressSet {
-				i.addressStore.DeleteKey(addr)
-				i.spendStore.DeleteKey(addr)
-			}
-		}
-	}
+	// Since batch processing is already done in the convertBlock stage, complex large block processing logic is no longer needed here.
+	// Reindex store cleanup must happen once before the range starts; deleting per block would drop earlier UTXOs for repeated addresses.
 
 	var balanceDeltas map[string]confirmedBalanceDelta
 	if i.balanceStore != nil {
@@ -245,7 +229,7 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 
 	// Phase 1: Index all outputs
 	tIncome := time.Now()
-	if cnt, addressCnt, err := i.indexIncome(block, allBlock, blockTimeStr, balanceDeltas); err != nil {
+	if cnt, addressCnt, err := i.indexIncome(block, allBlock, blockTimeStr, balanceDeltas, reindex); err != nil {
 		errMsg := syslogs.ErrLog{
 			Height:       block.Height,
 			BlockHash:    block.BlockHash,
@@ -267,7 +251,7 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 	//log.Println("==>i.processSpend")
 	// Phase 2: Process all inputs
 	tSpend := time.Now()
-	if cnt, err := i.processSpend(block, allBlock, blockTimeStr, balanceDeltas); err != nil {
+	if cnt, err := i.processSpend(block, allBlock, blockTimeStr, balanceDeltas, reindex); err != nil {
 		errMsg := syslogs.ErrLog{
 			Height:       block.Height,
 			BlockHash:    block.BlockHash,
@@ -456,7 +440,7 @@ func SaveBlockFile(fileType string, allBlock *Block, isPart bool) {
 		allBlock.SpendPartIndex += 1
 	}
 }
-func (i *UTXOIndexer) indexIncome(block *Block, allBlock *Block, blockTimeStr string, balanceDeltas map[string]confirmedBalanceDelta) (cnt int, addressNum int, err error) {
+func (i *UTXOIndexer) indexIncome(block *Block, allBlock *Block, blockTimeStr string, balanceDeltas map[string]confirmedBalanceDelta, reindex bool) (cnt int, addressNum int, err error) {
 	// Set reasonable batch size based on memory conditions
 	//const batchSize = 1000
 	workers = config.GlobalConfig.Workers
@@ -517,7 +501,7 @@ func (i *UTXOIndexer) indexIncome(block *Block, allBlock *Block, blockTimeStr st
 					}
 				}
 				// Whether to clean up mempool income records
-				if blockHeight > CleanedHeight {
+				if !reindex && blockHeight > CleanedHeight {
 					// If it's a partial batch of a large block, record mempool income
 					txPoint := common.ConcatBytesOptimized([]string{tx.ID, strconv.Itoa(x)}, ":")
 					// if out.Address == "19egopKjkPDphD9THoj6qbqG13Pf5DcCnj" {
@@ -530,6 +514,19 @@ func (i *UTXOIndexer) indexIncome(block *Block, allBlock *Block, blockTimeStr st
 
 		// Process current batch
 		//workers := 1
+		if reindex {
+			if err = i.utxoStore.DeleteMapKeys(&txMap); err != nil {
+				errMsg := syslogs.ErrLog{
+					Height:       block.Height,
+					BlockHash:    block.BlockHash,
+					ErrType:      "UtxoStoreDeleteReindex",
+					Timestamp:    time.Now().Unix(),
+					ErrorMessage: err.Error(),
+				}
+				syslogs.InsertErrLog(errMsg)
+				return 0, 0, err
+			}
+		}
 		if err = i.utxoStore.BulkMergeMapConcurrent(&txMap, workers); err != nil {
 			errMsg := syslogs.ErrLog{
 				Height:       block.Height,
@@ -645,7 +642,7 @@ func (i *UTXOIndexer) indexIncome(block *Block, allBlock *Block, blockTimeStr st
 		} else {
 			addressNum = len(addressIncomeMap)
 		}
-		if len(mempoolIncomeKeys) > 0 && i.mempoolManager != nil && blockHeight > CleanedHeight {
+		if len(mempoolIncomeKeys) > 0 && i.mempoolManager != nil && !reindex && blockHeight > CleanedHeight {
 			//log.Printf("Deleting %d mempool income records for block height %d,first key:%s", len(mempoolIncomeKeys), blockHeight, mempoolIncomeKeys[0])
 			err := i.mempoolManager.BatchDeleteIncom(mempoolIncomeKeys)
 			if err != nil {
@@ -701,7 +698,7 @@ func parseMemUTXODetail(value string) (detail storage.UTXODetail, ok bool) {
 	}, true
 }
 
-func (i *UTXOIndexer) processSpend(block *Block, allBlock *Block, blockTimeStr string, balanceDeltas map[string]confirmedBalanceDelta) (cnt int, err error) {
+func (i *UTXOIndexer) processSpend(block *Block, allBlock *Block, blockTimeStr string, balanceDeltas map[string]confirmedBalanceDelta, reindex bool) (cnt int, err error) {
 	workers = config.GlobalConfig.Workers
 	batchSize = config.GlobalConfig.BatchSize
 	blockHeight := int64(block.Height)
@@ -871,7 +868,7 @@ func (i *UTXOIndexer) processSpend(block *Block, allBlock *Block, blockTimeStr s
 		}
 		//log.Println(">>>[processSpend] finish update db")
 		// Whether to clean up mempool spend records
-		if blockHeight > CleanedHeight && i.mempoolManager != nil {
+		if !reindex && blockHeight > CleanedHeight && i.mempoolManager != nil {
 			//log.Printf("Deleting %d mempool spend records for block height %d,CleanHeight:%d", len(batchPoints), blockHeight, CleanedHeight)
 			err := i.mempoolManager.BatchDeleteSpend(deleteKeys)
 			if err != nil {
@@ -967,6 +964,49 @@ type Output struct {
 // SetMempoolManager sets the mempool manager
 func (i *UTXOIndexer) SetMempoolManager(mgr MempoolManager) {
 	i.mempoolManager = mgr
+}
+
+func (i *UTXOIndexer) ResetConfirmedHistoryForReindex() error {
+	stores := []struct {
+		name  string
+		store *storage.PebbleStore
+	}{
+		{name: "address", store: i.addressStore},
+		{name: "spend", store: i.spendStore},
+		{name: "balance", store: i.balanceStore},
+		{name: "rank", store: i.rankStore},
+	}
+
+	for _, item := range stores {
+		if err := clearStore(item.store); err != nil {
+			return fmt.Errorf("clear %s store: %w", item.name, err)
+		}
+	}
+
+	i.memUTXO.Range(func(key, _ interface{}) bool {
+		i.memUTXO.Delete(key)
+		return true
+	})
+	atomic.StoreInt64(&i.memUTXOCount, 0)
+
+	if i.metaStore != nil {
+		if err := i.setBalanceIndexReady(false); err != nil {
+			return fmt.Errorf("mark balance index not ready: %w", err)
+		}
+	}
+	return nil
+}
+
+func (i *UTXOIndexer) BeginReindex() bool {
+	return i.reindexing.CompareAndSwap(false, true)
+}
+
+func (i *UTXOIndexer) EndReindex() {
+	i.reindexing.Store(false)
+}
+
+func (i *UTXOIndexer) IsReindexing() bool {
+	return i.reindexing.Load()
 }
 
 // SetBlockchainClient sets the blockchain client for warmup

@@ -234,6 +234,7 @@ func (s *Server) reindexBlocks(c *gin.Context) {
 	// Parse request parameters
 	startHeightStr := c.Query("start")
 	endHeightStr := c.Query("end")
+	resetHistory := parseBoolQuery(c.Query("reset"))
 
 	if startHeightStr == "" || endHeightStr == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -283,16 +284,33 @@ func (s *Server) reindexBlocks(c *gin.Context) {
 	if endHeight > currentHeight {
 		endHeight = currentHeight
 	}
+	if !s.indexer.BeginReindex() {
+		c.JSON(http.StatusConflict, gin.H{
+			"success": false,
+			"error":   "reindex is already running",
+		})
+		return
+	}
 
 	// Return response immediately, start reindexing in background
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": fmt.Sprintf("Starting to reindex blocks, range from %d to %d", startHeight, endHeight),
+		"reset":   resetHistory,
 	})
 
 	// Start reindexing process in background
 	go func() {
+		defer s.indexer.EndReindex()
 		log.Printf("Starting to reindex blocks, range from %d to %d", startHeight, endHeight)
+		if resetHistory {
+			log.Printf("Resetting confirmed UTXO history stores before reindex, range from %d to %d", startHeight, endHeight)
+			if err := s.indexer.ResetConfirmedHistoryForReindex(); err != nil {
+				log.Printf("Failed to reset confirmed UTXO history stores before reindex: %v", err)
+				return
+			}
+			log.Printf("Confirmed UTXO history stores reset complete")
+		}
 
 		// Set progress bar
 		blocksToProcess := endHeight - startHeight + 1
@@ -310,6 +328,15 @@ func (s *Server) reindexBlocks(c *gin.Context) {
 
 		log.Printf("Reindexing completed, processed %d blocks, from height %d to %d", blocksToProcess, startHeight, endHeight)
 	}()
+}
+
+func parseBoolQuery(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) getRichList(c *gin.Context) {

@@ -81,7 +81,7 @@ func TestAddBlockData(t *testing.T) {
 		IncomeData: make(map[string][]string),
 		SpendData:  make(map[string][]string),
 	}
-	inCnt, outCnt, addressNum, err := idx.IndexBlock(&blockPart, allBlock, false, "1623456789")
+	inCnt, outCnt, addressNum, err := idx.IndexBlock(&blockPart, allBlock, false, "1623456789", false)
 	fmt.Println("inCnt:", inCnt, "outCnt:", outCnt, "addressNum:", addressNum, "err:", err)
 
 }

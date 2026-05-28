@@ -60,6 +60,24 @@ func TestDedupMerger_Idempotent(t *testing.T) {
 	}
 }
 
+func TestDedupMerger_PreservesFirstSeenSegmentOrder(t *testing.T) {
+	m := &dedupMerger{
+		buf: []byte(",zaddr@200@t2,aaddr@100@t1,zaddr@200@t2"),
+	}
+	result, closer, err := m.Finish(true)
+	if err != nil {
+		t.Fatalf("Finish error: %v", err)
+	}
+	if closer != nil {
+		closer.Close()
+	}
+
+	expected := ",zaddr@200@t2,aaddr@100@t1"
+	if string(result) != expected {
+		t.Fatalf("expected order-preserving dedup %q, got %q", expected, string(result))
+	}
+}
+
 func TestDedupMerger_EmptyInput(t *testing.T) {
 	m := &dedupMerger{buf: nil}
 	result, _, err := m.Finish(true)
@@ -128,7 +146,7 @@ func TestDedupMerger_MergerFactory(t *testing.T) {
 	if closer != nil {
 		closer.Close()
 	}
-	if string(result) != ",new@2@t2,old@1@t1" {
+	if string(result) != ",old@1@t1,new@2@t2" {
 		t.Errorf("unexpected result: %s", result)
 	}
 }
