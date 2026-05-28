@@ -337,7 +337,7 @@ func (c *Client) SyncBlocks(idx *indexer.UTXOIndexer, checkInterval time.Duratio
 			}
 			idx.SetSyncCount(height, currentHeight)
 			for {
-				if err := c.ProcessBlock(idx, height, true, currentHeight); err != nil {
+				if err := c.ProcessBlock(idx, height, true, currentHeight, false); err != nil {
 					errMsg := syslogs.ErrLog{
 						Height:       height,
 						ErrType:      "ProcessBlock",
@@ -507,7 +507,7 @@ func (c *Client) SyncBlocks(idx *indexer.UTXOIndexer, checkInterval time.Duratio
 
 //		return nil
 //	}
-func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight bool, currentHeight int) error {
+func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight bool, currentHeight int, reindex bool) error {
 	// currentHeight: current chain height, passed by SyncBlocks to avoid querying for each block
 	// Check if this is the latest block (or last batch of blocks)
 	isLatestBlock := (height >= currentHeight)
@@ -613,7 +613,7 @@ func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight
 			}
 
 			// 索引当前批次
-			_, _, _, err := idx.IndexBlock(blockPart, allBlock, updateHeight, blockTimeStr)
+			_, _, _, err := idx.IndexBlock(blockPart, allBlock, updateHeight, blockTimeStr, reindex)
 			if err != nil {
 				errMsg := syslogs.ErrLog{
 					Height:       height,
@@ -758,7 +758,7 @@ func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight
 		//fmt.Printf("Batch %d-%d, memory usage: %.2f MB\n", startIdx, endIdx, float64(m.Alloc)/1024/1024)
 		// Index
 		blockTimeStr := strconv.FormatInt(blockTime, 10)
-		if inCnt, outCnt, addressNum, err := idx.IndexBlock(blockPart, allBlock, updateHeight, blockTimeStr); err != nil {
+		if inCnt, outCnt, addressNum, err := idx.IndexBlock(blockPart, allBlock, updateHeight, blockTimeStr, reindex); err != nil {
 			errMsg := syslogs.ErrLog{
 				Height:       height,
 				BlockHash:    blockHash,

@@ -106,6 +106,11 @@ func (s *PebbleStore) DBGetErrorCount() int64 {
 	return s.dbGetErrors.Load()
 }
 
+func (s *PebbleStore) DeleteKey(key string) error {
+	db := s.getShard(key)
+	return db.Delete([]byte(key), pebble.Sync)
+}
+
 type PebbleOpenOptions struct {
 	ReadOnly                    bool
 	CacheSizeBytes              int64
@@ -1092,6 +1097,37 @@ func (s *PebbleStore) GetLastHeight() (int, error) {
 func (s *PebbleStore) SaveLastHeight(height int) error {
 	key := []byte("last_height")
 	return s.Put(key, []byte(strconv.Itoa(height)))
+}
+
+// DeleteMapKeys deletes all keys in the given map from the store before a reindex.
+func (s *PebbleStore) DeleteMapKeys(data *map[string][]string) error {
+	if data == nil || len(*data) == 0 {
+		return nil
+	}
+
+	// Group keys by shard
+	shardKeys := make(map[int][]string)
+	for key := range *data {
+		shardIdx := s.getShardIndex(key)
+		shardKeys[shardIdx] = append(shardKeys[shardIdx], key)
+	}
+
+	for shardIdx, keys := range shardKeys {
+		db := s.shards[shardIdx]
+		batch := db.NewBatch()
+		for _, key := range keys {
+			if err := batch.Delete([]byte(key), nil); err != nil {
+				batch.Close()
+				return fmt.Errorf("batch delete key %s: %w", key, err)
+			}
+		}
+		if err := batch.Commit(pebble.Sync); err != nil {
+			batch.Close()
+			return fmt.Errorf("commit delete batch shard %d: %w", shardIdx, err)
+		}
+		batch.Close()
+	}
+	return nil
 }
 
 // BulkMergeMapConcurrent performs concurrent bulk merge operations on the PebbleStore

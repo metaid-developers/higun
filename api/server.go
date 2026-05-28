@@ -302,7 +302,7 @@ func (s *Server) reindexBlocks(c *gin.Context) {
 		for height := startHeight; height <= endHeight; height++ {
 			// Use shared block processing function
 			// For manual API reindexing, assume current height is the target height
-			if err := s.bcClient.ProcessBlock(s.indexer, height, false, height); err != nil {
+			if err := s.bcClient.ProcessBlock(s.indexer, height, false, height, true); err != nil {
 				log.Printf("Failed to process block at height %d: %v", height, err)
 				continue // Continue processing next block instead of terminating entire reindexing process
 			}

@@ -204,7 +204,7 @@ func (i *UTXOIndexer) PrintMemoryStats() {
 		atomic.LoadInt64(&i.memParseErrors))
 }
 
-func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight bool, blockTimeStr string) (inCnt int, outCnt int, addressNum int, err error) {
+func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight bool, blockTimeStr string, reindex bool) (inCnt int, outCnt int, addressNum int, err error) {
 	if block == nil {
 		return 0, 0, 0, fmt.Errorf("cannot index nil block")
 	}
@@ -220,6 +220,24 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 
 	// Since batch processing is already done in the convertBlock stage, complex large block processing logic is no longer needed here
 	// Directly process transactions in the current batch
+	// When reindexing, clear old (potentially corrupted) data for all addresses in this block
+	if reindex {
+		addressSet := make(map[string]struct{})
+		for _, tx := range block.Transactions {
+			for _, out := range tx.Outputs {
+				if out.Address != "" && out.Address != "errAddress" {
+					addressSet[out.Address] = struct{}{}
+				}
+			}
+		}
+		if len(addressSet) > 0 {
+			for addr := range addressSet {
+				i.addressStore.DeleteKey(addr)
+				i.spendStore.DeleteKey(addr)
+			}
+		}
+	}
+
 	var balanceDeltas map[string]confirmedBalanceDelta
 	if i.balanceStore != nil {
 		balanceDeltas = make(map[string]confirmedBalanceDelta)
