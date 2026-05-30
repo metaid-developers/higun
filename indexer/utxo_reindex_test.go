@@ -300,3 +300,56 @@ func TestReindexModeRefreshesTouchedBalancesWithoutDoubleCounting(t *testing.T) 
 		t.Fatalf("expected idempotent reindex utxo count 1, got %d", balance.UTXOCount)
 	}
 }
+
+func TestReindexSessionDefersTouchedBalanceRefreshUntilEnd(t *testing.T) {
+	idx := newBalanceIndexTestIndexer(t)
+	if err := idx.setBalanceIndexReady(true); err != nil {
+		t.Fatalf("setBalanceIndexReady: %v", err)
+	}
+	if err := idx.putAddressBalance("addr-reindex-deferred", 99, 1); err != nil {
+		t.Fatalf("seed stale balance: %v", err)
+	}
+	if !idx.BeginReindex() {
+		t.Fatalf("BeginReindex: expected to acquire reindex state")
+	}
+
+	block := &Block{
+		Height:    30,
+		BlockHash: "block-reindex-deferred",
+		Transactions: []*Transaction{{
+			ID:      "tx-reindex-deferred",
+			Outputs: []*Output{{Address: "addr-reindex-deferred", Amount: "2500"}},
+		}},
+		AddressIncome: make(map[string][]*Income),
+	}
+	allBlock := &Block{
+		Height:     block.Height,
+		BlockHash:  block.BlockHash,
+		UtxoData:   make(map[string][]string),
+		IncomeData: make(map[string][]string),
+		SpendData:  make(map[string][]string),
+	}
+	if _, _, _, err := idx.IndexBlock(block, allBlock, false, "1700000000", true); err != nil {
+		t.Fatalf("IndexBlock: %v", err)
+	}
+
+	balance, err := idx.GetBalance("addr-reindex-deferred", 0)
+	if err != nil {
+		t.Fatalf("GetBalance before EndReindex: %v", err)
+	}
+	if balance.ConfirmedBalanceSatoshi != 99 {
+		t.Fatalf("expected stale balance before EndReindex, got %d", balance.ConfirmedBalanceSatoshi)
+	}
+
+	idx.EndReindex()
+	balance, err = idx.GetBalance("addr-reindex-deferred", 0)
+	if err != nil {
+		t.Fatalf("GetBalance after EndReindex: %v", err)
+	}
+	if balance.ConfirmedBalanceSatoshi != 2500 {
+		t.Fatalf("expected refreshed balance after EndReindex, got %d", balance.ConfirmedBalanceSatoshi)
+	}
+	if balance.UTXOCount != 1 {
+		t.Fatalf("expected refreshed utxo count after EndReindex, got %d", balance.UTXOCount)
+	}
+}

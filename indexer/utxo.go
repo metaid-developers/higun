@@ -49,6 +49,8 @@ type UTXOIndexer struct {
 	// Used to ensure only one scan runs at a time (CAS, never blocks callers).
 	richListRefreshing atomic.Int32
 	reindexing         atomic.Bool
+	reindexBalanceMu   sync.Mutex
+	reindexDeltas      map[string]confirmedBalanceDelta
 
 	// Error and diagnostics counters
 	memParseErrors     int64 // count of memUTXO parse failures (Fix 3)
@@ -998,10 +1000,17 @@ func (i *UTXOIndexer) ResetConfirmedHistoryForReindex() error {
 }
 
 func (i *UTXOIndexer) BeginReindex() bool {
-	return i.reindexing.CompareAndSwap(false, true)
+	if !i.reindexing.CompareAndSwap(false, true) {
+		return false
+	}
+	i.resetReindexBalanceDeltas()
+	return true
 }
 
 func (i *UTXOIndexer) EndReindex() {
+	if err := i.flushReindexBalanceDeltas(); err != nil {
+		log.Printf("[BalanceIndex] failed to flush reindex balance deltas: %v", err)
+	}
 	i.reindexing.Store(false)
 }
 

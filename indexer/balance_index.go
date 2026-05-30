@@ -372,6 +372,10 @@ func (i *UTXOIndexer) updateConfirmedBalanceIndexes(deltas map[string]confirmedB
 		return nil
 	}
 	if reindex {
+		if i.IsReindexing() {
+			i.accumulateReindexBalanceDeltas(deltas)
+			return nil
+		}
 		if err := i.rebuildTouchedConfirmedBalanceIndexesFromHistory(deltas); err != nil {
 			return fmt.Errorf("rebuild touched confirmed balance indexes during reindex: %w", err)
 		}
@@ -406,6 +410,45 @@ func (i *UTXOIndexer) updateConfirmedBalanceIndexes(deltas map[string]confirmedB
 			return fmt.Errorf("disable confirmed balance index after update failure: %w", setErr)
 		}
 	}
+	return nil
+}
+
+func (i *UTXOIndexer) resetReindexBalanceDeltas() {
+	i.reindexBalanceMu.Lock()
+	defer i.reindexBalanceMu.Unlock()
+	i.reindexDeltas = make(map[string]confirmedBalanceDelta)
+}
+
+func (i *UTXOIndexer) accumulateReindexBalanceDeltas(deltas map[string]confirmedBalanceDelta) {
+	if len(deltas) == 0 {
+		return
+	}
+	i.reindexBalanceMu.Lock()
+	defer i.reindexBalanceMu.Unlock()
+	if i.reindexDeltas == nil {
+		i.reindexDeltas = make(map[string]confirmedBalanceDelta, len(deltas))
+	}
+	for address, delta := range deltas {
+		existing := i.reindexDeltas[address]
+		existing.BalanceSatoshi += delta.BalanceSatoshi
+		existing.UTXOCount += delta.UTXOCount
+		i.reindexDeltas[address] = existing
+	}
+}
+
+func (i *UTXOIndexer) flushReindexBalanceDeltas() error {
+	i.reindexBalanceMu.Lock()
+	deltas := i.reindexDeltas
+	i.reindexDeltas = nil
+	i.reindexBalanceMu.Unlock()
+
+	if len(deltas) == 0 {
+		return nil
+	}
+	if err := i.rebuildTouchedConfirmedBalanceIndexesFromHistory(deltas); err != nil {
+		return fmt.Errorf("rebuild touched confirmed balance indexes after reindex: %w", err)
+	}
+	log.Printf("[BalanceIndex] rebuilt %d touched addresses after reindex", len(deltas))
 	return nil
 }
 
