@@ -367,8 +367,14 @@ func (i *UTXOIndexer) StartBalanceIndexBootstrapIfNeeded() <-chan error {
 	return doneCh
 }
 
-func (i *UTXOIndexer) updateConfirmedBalanceIndexes(deltas map[string]confirmedBalanceDelta) error {
+func (i *UTXOIndexer) updateConfirmedBalanceIndexes(deltas map[string]confirmedBalanceDelta, reindex bool) error {
 	if len(deltas) == 0 || i.balanceStore == nil {
+		return nil
+	}
+	if reindex {
+		if err := i.rebuildTouchedConfirmedBalanceIndexesFromHistory(deltas); err != nil {
+			return fmt.Errorf("rebuild touched confirmed balance indexes during reindex: %w", err)
+		}
 		return nil
 	}
 	if !i.isBalanceIndexReady() {

@@ -145,7 +145,7 @@ func (idx *UTXOIndexer) DoDelete(block *Block) error {
 		}
 	}
 
-	if err := idx.updateConfirmedBalanceIndexes(balanceDeltas); err != nil {
+	if err := idx.updateConfirmedBalanceIndexes(balanceDeltas, false); err != nil {
 		return fmt.Errorf("rollback balance indexes failed: %w", err)
 	}
 	return nil

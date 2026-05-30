@@ -188,5 +188,115 @@ func TestReindexReplacesExistingTxOutputsBeforeMerge(t *testing.T) {
 		t.Fatalf("IndexBlock: %v", err)
 	}
 
-	assertStoreValue(t, idx.utxoStore, "tx-order", ",aaddr@3000@1700000200,zaddr@2000@1700000200")
+	assertStoreValue(t, idx.utxoStore, "tx-order", ",aaddr@3000@1700000200@0,zaddr@2000@1700000200@1")
+}
+
+func TestIndexBlockPreservesDuplicateOutputsByVoutIndex(t *testing.T) {
+	idx := newBalanceIndexTestIndexer(t)
+
+	block1 := &Block{
+		Height:    10,
+		BlockHash: "block-duplicate-outputs",
+		Transactions: []*Transaction{{
+			ID: "tx-duplicate-outputs",
+			Outputs: []*Output{
+				{Address: "addr-duplicate", Amount: "1000"},
+				{Address: "addr-duplicate", Amount: "1000"},
+			},
+		}},
+		AddressIncome: make(map[string][]*Income),
+	}
+	allBlock1 := &Block{
+		Height:     block1.Height,
+		BlockHash:  block1.BlockHash,
+		UtxoData:   make(map[string][]string),
+		IncomeData: make(map[string][]string),
+		SpendData:  make(map[string][]string),
+	}
+	if _, _, _, err := idx.IndexBlock(block1, allBlock1, false, "1700000000", false); err != nil {
+		t.Fatalf("IndexBlock block1: %v", err)
+	}
+
+	details, err := idx.utxoStore.QueryUTXODetails(&[]string{"tx-duplicate-outputs:1"})
+	if err != nil {
+		t.Fatalf("QueryUTXODetails: %v", err)
+	}
+	if _, ok := details["tx-duplicate-outputs:1"]; !ok {
+		t.Fatalf("expected duplicate vout index 1 to be queryable, got %#v", details)
+	}
+
+	block2 := &Block{
+		Height:    11,
+		BlockHash: "block-spend-duplicate-output",
+		Transactions: []*Transaction{{
+			ID:     "tx-spend-duplicate-output",
+			Inputs: []*Input{{TxPoint: "tx-duplicate-outputs:1"}},
+		}},
+		AddressIncome: make(map[string][]*Income),
+	}
+	allBlock2 := &Block{
+		Height:     block2.Height,
+		BlockHash:  block2.BlockHash,
+		UtxoData:   make(map[string][]string),
+		IncomeData: make(map[string][]string),
+		SpendData:  make(map[string][]string),
+	}
+	if _, _, _, err := idx.IndexBlock(block2, allBlock2, false, "1700000100", false); err != nil {
+		t.Fatalf("IndexBlock block2: %v", err)
+	}
+
+	balance, err := idx.GetBalance("addr-duplicate", 0)
+	if err != nil {
+		t.Fatalf("GetBalance: %v", err)
+	}
+	if balance.ConfirmedBalanceSatoshi != 1000 {
+		t.Fatalf("expected one duplicate output to remain after spending vout 1, got %d", balance.ConfirmedBalanceSatoshi)
+	}
+	if balance.UTXOCount != 1 {
+		t.Fatalf("expected one duplicate UTXO to remain after spending vout 1, got %d", balance.UTXOCount)
+	}
+}
+
+func TestReindexModeRefreshesTouchedBalancesWithoutDoubleCounting(t *testing.T) {
+	idx := newBalanceIndexTestIndexer(t)
+	if err := idx.setBalanceIndexReady(true); err != nil {
+		t.Fatalf("setBalanceIndexReady: %v", err)
+	}
+
+	newBlock := func() *Block {
+		return &Block{
+			Height:    20,
+			BlockHash: "block-reindex-idempotent",
+			Transactions: []*Transaction{{
+				ID:      "tx-reindex-idempotent",
+				Outputs: []*Output{{Address: "addr-reindex-idempotent", Amount: "2500"}},
+			}},
+			AddressIncome: make(map[string][]*Income),
+		}
+	}
+
+	for run := 1; run <= 2; run++ {
+		block := newBlock()
+		allBlock := &Block{
+			Height:     block.Height,
+			BlockHash:  block.BlockHash,
+			UtxoData:   make(map[string][]string),
+			IncomeData: make(map[string][]string),
+			SpendData:  make(map[string][]string),
+		}
+		if _, _, _, err := idx.IndexBlock(block, allBlock, false, "1700000000", true); err != nil {
+			t.Fatalf("IndexBlock reindex run %d: %v", run, err)
+		}
+	}
+
+	balance, err := idx.GetBalance("addr-reindex-idempotent", 0)
+	if err != nil {
+		t.Fatalf("GetBalance: %v", err)
+	}
+	if balance.ConfirmedBalanceSatoshi != 2500 {
+		t.Fatalf("expected idempotent reindex balance 2500, got %d", balance.ConfirmedBalanceSatoshi)
+	}
+	if balance.UTXOCount != 1 {
+		t.Fatalf("expected idempotent reindex utxo count 1, got %d", balance.UTXOCount)
+	}
 }

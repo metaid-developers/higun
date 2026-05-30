@@ -266,7 +266,7 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 	}
 	spendTime := time.Since(tSpend)
 
-	if err := i.updateConfirmedBalanceIndexes(balanceDeltas); err != nil {
+	if err := i.updateConfirmedBalanceIndexes(balanceDeltas, reindex); err != nil {
 		errMsg := syslogs.ErrLog{
 			Height:       block.Height,
 			BlockHash:    block.BlockHash,
@@ -478,7 +478,7 @@ func (i *UTXOIndexer) indexIncome(block *Block, allBlock *Block, blockTimeStr st
 				}
 				inCnt++
 				amount, amountErr := strconv.ParseInt(out.Amount, 10, 64)
-				v := common.ConcatBytesOptimized([]string{out.Address, out.Amount, blockTimeStr}, "@")
+				v := common.ConcatBytesOptimized([]string{out.Address, out.Amount, blockTimeStr, strconv.Itoa(x)}, "@")
 				txMap[tx.ID] = append(txMap[tx.ID], v)
 				// 只在BlockFilesEnabled时才累积到allBlock（避免内存泄露）
 				if config.GlobalConfig.BlockFilesEnabled {
