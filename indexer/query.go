@@ -38,20 +38,16 @@ func (i *UTXOIndexer) GetBalance(address string, dustThreshold int64) (balanceRe
 	}
 
 	noMempoolActivity := len(mempoolIncomeData) == 0 && len(mempoolSpendData) == 0
+	var legacyRow confirmedBalanceRow
+	hasLegacyRow := false
 	if i.balanceStore != nil && noMempoolActivity {
 		row, rowErr := i.getAddressBalanceRow(address)
 		if rowErr == nil {
 			if i.isBalanceIndexReady() || row.Tracked {
-				confirmedBalance := row.BalanceSatoshi
-				balanceResult = Balance{
-					ConfirmedBalanceSatoshi: uint64(confirmedBalance),
-					ConfirmedBalance:        float64(confirmedBalance) / 1e8,
-					BalanceSatoshi:          uint64(confirmedBalance),
-					Balance:                 float64(confirmedBalance) / 1e8,
-					UTXOCount:               row.UTXOCount,
-				}
-				return
+				return balanceFromConfirmedRow(row), nil
 			}
+			legacyRow = row
+			hasLegacyRow = true
 		} else if !errors.Is(rowErr, storage.ErrNotFound) {
 			err = rowErr
 			return
@@ -63,11 +59,50 @@ func (i *UTXOIndexer) GetBalance(address string, dustThreshold int64) (balanceRe
 		return
 	}
 	if i.balanceStore != nil && noMempoolActivity && !i.isBalanceIndexReady() {
+		historyMissing, historyErr := i.confirmedIncomeHistoryMissing(address)
+		if historyErr != nil {
+			err = historyErr
+			return
+		}
+		if historyMissing && hasLegacyRow {
+			return balanceFromConfirmedRow(legacyRow), nil
+		}
 		if cacheErr := i.putTrackedAddressBalance(address, int64(balanceResult.ConfirmedBalanceSatoshi), balanceResult.UTXOCount); cacheErr != nil {
 			log.Printf("[BalanceIndex] failed to cache confirmed balance row for %s: %v", address, cacheErr)
 		}
 	}
 	return
+}
+
+func balanceFromConfirmedRow(row confirmedBalanceRow) Balance {
+	confirmedBalance := row.BalanceSatoshi
+	return Balance{
+		ConfirmedBalanceSatoshi: uint64(confirmedBalance),
+		ConfirmedBalance:        float64(confirmedBalance) / 1e8,
+		BalanceSatoshi:          uint64(confirmedBalance),
+		Balance:                 float64(confirmedBalance) / 1e8,
+		UTXOCount:               row.UTXOCount,
+	}
+}
+
+func (i *UTXOIndexer) confirmedIncomeHistoryMissing(address string) (bool, error) {
+	if i.addressStore == nil {
+		return true, nil
+	}
+	data, _, err := i.addressStore.GetWithShard([]byte(address))
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return true, nil
+		}
+		return false, fmt.Errorf("load income history for %s: %w", address, err)
+	}
+	for _, part := range strings.Split(string(data), ",") {
+		fields := strings.Split(part, "@")
+		if len(fields) >= 3 && fields[0] != "" && fields[1] != "" {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (i *UTXOIndexer) getBalanceFromHistory(address string, dustThreshold int64) (balanceResult Balance, err error) {

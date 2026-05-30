@@ -239,6 +239,28 @@ func TestGetBalanceIgnoresPartialBalanceIndexWhenNotReady(t *testing.T) {
 	}
 }
 
+func TestGetBalanceUsesLegacyBalanceRowWhenHistoryMissingAndIndexNotReady(t *testing.T) {
+	idx := newBalanceIndexTestIndexer(t)
+
+	if err := idx.putAddressBalance("addr-legacy-row", 999999, 9); err != nil {
+		t.Fatalf("putAddressBalance addr-legacy-row: %v", err)
+	}
+
+	balance, err := idx.GetBalance("addr-legacy-row", 0)
+	if err != nil {
+		t.Fatalf("GetBalance addr-legacy-row: %v", err)
+	}
+	if balance.ConfirmedBalanceSatoshi != 999999 {
+		t.Fatalf("expected confirmed balance 999999 from legacy row, got %d", balance.ConfirmedBalanceSatoshi)
+	}
+	if balance.BalanceSatoshi != 999999 {
+		t.Fatalf("expected balance 999999 from legacy row, got %d", balance.BalanceSatoshi)
+	}
+	if balance.UTXOCount != 9 {
+		t.Fatalf("expected utxo count 9 from legacy row, got %d", balance.UTXOCount)
+	}
+}
+
 func TestGetBalanceMaterializesAddressBalanceRowFromHistoryFallback(t *testing.T) {
 	idx := newBalanceIndexTestIndexer(t)
 
