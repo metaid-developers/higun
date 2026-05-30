@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/metaid/utxo_indexer/common"
@@ -361,8 +362,94 @@ func (i *UTXOIndexer) GetUTXOs(address string) (result []UTXO, err error) {
 	mempoolCheckTxMap = nil
 	spendMap = nil
 	incomeMap = nil
-	return result, nil
+	return i.filterConfirmedUTXOsWithValidator(result)
 }
+
+func (i *UTXOIndexer) filterConfirmedUTXOsWithValidator(utxos []UTXO) ([]UTXO, error) {
+	if !i.validateConfirmedUTXOs || i.utxoValidator == nil || len(utxos) == 0 {
+		return utxos, nil
+	}
+
+	keep := make([]bool, len(utxos))
+	jobs := make(chan int)
+	var confirmedCount int
+	for idx, utxo := range utxos {
+		if utxo.IsMempool {
+			keep[idx] = true
+			continue
+		}
+		confirmedCount++
+	}
+	if confirmedCount == 0 {
+		return utxos, nil
+	}
+
+	workers := i.utxoValidationWorkers
+	if workers <= 0 {
+		workers = 8
+	}
+	if workers > confirmedCount {
+		workers = confirmedCount
+	}
+
+	var wg sync.WaitGroup
+	var errOnce sync.Once
+	var firstErr error
+	setErr := func(err error) {
+		if err == nil {
+			return
+		}
+		errOnce.Do(func() {
+			firstErr = err
+		})
+	}
+
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				utxo := utxos[idx]
+				vout, parseErr := strconv.ParseUint(utxo.Index, 10, 32)
+				if parseErr != nil {
+					setErr(fmt.Errorf("parse confirmed utxo index %s:%s: %w", utxo.TxID, utxo.Index, parseErr))
+					continue
+				}
+				unspent, validateErr := i.utxoValidator.IsUnspent(utxo.TxID, uint32(vout))
+				if validateErr != nil {
+					setErr(fmt.Errorf("validate confirmed utxo %s:%s: %w", utxo.TxID, utxo.Index, validateErr))
+					continue
+				}
+				keep[idx] = unspent
+			}
+		}()
+	}
+
+	for idx, utxo := range utxos {
+		if utxo.IsMempool {
+			continue
+		}
+		jobs <- idx
+	}
+	close(jobs)
+	wg.Wait()
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
+	filtered := make([]UTXO, 0, len(utxos))
+	for idx, utxo := range utxos {
+		if keep[idx] {
+			filtered = append(filtered, utxo)
+		}
+	}
+	if dropped := len(utxos) - len(filtered); dropped > 0 {
+		log.Printf("[UTXO] filtered %d stale confirmed UTXOs via node gettxout validation", dropped)
+	}
+	return filtered, nil
+}
+
 func (i *UTXOIndexer) GetSpendUTXOs(address string) (utxos []string, err error) {
 	// 1. Get confirmed UTXOs
 	addrKey := []byte(address)

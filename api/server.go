@@ -732,9 +732,37 @@ func (s *Server) checkUtxo(c *gin.Context) {
 			}
 		}
 
+		if utxoInfo.IsExist && utxoInfo.TxConfirm && utxoInfo.SpendStatus == "unspent" {
+			unspent, err := s.isConfirmedOutPointUnspent(outPoint)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": -2004, "msg": err.Error()})
+				return
+			}
+			if !unspent {
+				utxoInfo.SpendStatus = "spend"
+				spendInfo.Where = "block"
+				spendInfo.Address = utxoInfo.Address
+			}
+		}
+
 		utxoInfo.SpendInfo = spendInfo
 		utxoInfoMap[outPoint] = utxoInfo
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 2000, "msg": "ok", "data": utxoInfoMap})
+}
+
+func (s *Server) isConfirmedOutPointUnspent(outPoint string) (bool, error) {
+	if s == nil || s.indexer == nil {
+		return true, nil
+	}
+	arr := strings.Split(outPoint, ":")
+	if len(arr) < 2 {
+		return true, nil
+	}
+	vout, err := strconv.ParseUint(arr[1], 10, 32)
+	if err != nil {
+		return false, fmt.Errorf("parse confirmed outpoint %s: %w", outPoint, err)
+	}
+	return s.indexer.ValidateConfirmedUTXO(arr[0], uint32(vout))
 }

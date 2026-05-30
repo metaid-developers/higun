@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -35,6 +36,18 @@ func (m *stubMempoolManager) BatchDeleteSpend(list []string) error { return nil 
 func (m *stubMempoolManager) DeleteMempool() error { return nil }
 
 func (m *stubMempoolManager) StartMempool() error { return nil }
+
+type stubConfirmedUTXOValidator struct {
+	unspent map[string]bool
+	err     error
+}
+
+func (v *stubConfirmedUTXOValidator) IsUnspent(txID string, index uint32) (bool, error) {
+	if v.err != nil {
+		return false, v.err
+	}
+	return v.unspent[txID+":"+strconv.FormatUint(uint64(index), 10)], nil
+}
 
 func newBalanceIndexTestIndexer(t *testing.T) *UTXOIndexer {
 	t.Helper()
@@ -344,6 +357,42 @@ func TestGetUTXOsDeduplicatesMempoolIncomeRecords(t *testing.T) {
 	}
 	if utxos[0].TxID == utxos[1].TxID && utxos[0].Index == utxos[1].Index {
 		t.Fatalf("expected unique mempool utxos, got duplicates: %+v", utxos)
+	}
+}
+
+func TestGetUTXOsFiltersConfirmedOutputsMissingFromNodeUTXOSet(t *testing.T) {
+	idx := newBalanceIndexTestIndexer(t)
+	if err := idx.addressStore.Set([]byte("addr-rpc-check"), []byte("tx-stale@0@5000@1700000000,tx-good@1@6000@1700000001")); err != nil {
+		t.Fatalf("seed addressStore: %v", err)
+	}
+	idx.SetConfirmedUTXOValidator(&stubConfirmedUTXOValidator{
+		unspent: map[string]bool{
+			"tx-good:1": true,
+		},
+	}, true, 2)
+
+	utxos, err := idx.GetUTXOs("addr-rpc-check")
+	if err != nil {
+		t.Fatalf("GetUTXOs addr-rpc-check: %v", err)
+	}
+	if len(utxos) != 1 {
+		t.Fatalf("expected only 1 RPC-confirmed UTXO, got %d: %+v", len(utxos), utxos)
+	}
+	if utxos[0].TxID != "tx-good" || utxos[0].Index != "1" {
+		t.Fatalf("expected tx-good:1 to remain, got %+v", utxos[0])
+	}
+}
+
+func TestGetUTXOsFailsClosedWhenConfirmedUTXOValidationFails(t *testing.T) {
+	idx := newBalanceIndexTestIndexer(t)
+	if err := idx.addressStore.Set([]byte("addr-rpc-error"), []byte("tx-a@0@5000@1700000000")); err != nil {
+		t.Fatalf("seed addressStore: %v", err)
+	}
+	idx.SetConfirmedUTXOValidator(&stubConfirmedUTXOValidator{err: errors.New("rpc unavailable")}, true, 2)
+
+	_, err := idx.GetUTXOs("addr-rpc-error")
+	if err == nil {
+		t.Fatalf("expected GetUTXOs to fail closed when RPC validation fails")
 	}
 }
 

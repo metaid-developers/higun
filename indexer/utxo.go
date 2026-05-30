@@ -25,6 +25,10 @@ type BlockchainClient interface {
 	GetBlock(height int64) (*Block, error)
 }
 
+type ConfirmedUTXOValidator interface {
+	IsUnspent(txID string, index uint32) (bool, error)
+}
+
 type UTXOIndexer struct {
 	utxoStore               *storage.PebbleStore
 	addressStore            *storage.PebbleStore
@@ -38,6 +42,9 @@ type UTXOIndexer struct {
 	params                  config.IndexerParams
 	mempoolManager          MempoolManager   // Use interface type instead of interface{}
 	blockchainClient        BlockchainClient // RPC client for warmup
+	utxoValidator           ConfirmedUTXOValidator
+	validateConfirmedUTXOs  bool
+	utxoValidationWorkers   int
 	// Memory UTXO cache for performance
 	memUTXO         sync.Map // key: "txid:index" -> value: "address@amount@blockTime"
 	memUTXOCount    int64    // Number of UTXOs in memory
@@ -79,6 +86,25 @@ func NewUTXOIndexer(params config.IndexerParams, utxoStore, addressStore *storag
 func (i *UTXOIndexer) SetBalanceStores(balanceStore, rankStore *storage.PebbleStore) {
 	i.balanceStore = balanceStore
 	i.rankStore = rankStore
+}
+
+func (i *UTXOIndexer) SetConfirmedUTXOValidator(validator ConfirmedUTXOValidator, enabled bool, workers int) {
+	if workers <= 0 {
+		workers = 8
+	}
+	if workers > 32 {
+		workers = 32
+	}
+	i.utxoValidator = validator
+	i.validateConfirmedUTXOs = enabled
+	i.utxoValidationWorkers = workers
+}
+
+func (i *UTXOIndexer) ValidateConfirmedUTXO(txID string, index uint32) (bool, error) {
+	if i == nil || !i.validateConfirmedUTXOs || i.utxoValidator == nil {
+		return true, nil
+	}
+	return i.utxoValidator.IsUnspent(txID, index)
 }
 
 // func (i *UTXOIndexer) optimizeConcurrency(dataSize int) int {

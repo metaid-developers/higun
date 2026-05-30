@@ -148,6 +148,72 @@ func (c *Client) GetRawTransaction(txHashStr string) (*btcutil.Tx, error) {
 	return tx, nil
 }
 
+func (c *Client) IsUnspent(txID string, index uint32) (bool, error) {
+	if c == nil || c.cfg == nil {
+		return false, fmt.Errorf("rpc client not initialized")
+	}
+	if c.cfg.RPC.Host == "" || c.cfg.RPC.Port == "" {
+		return false, fmt.Errorf("rpc host or port not configured")
+	}
+	if _, err := chainhash.NewHashFromStr(txID); err != nil {
+		return false, fmt.Errorf("invalid txid %s: %w", txID, err)
+	}
+
+	timeout := time.Duration(c.cfg.UTXOValidationRPCTimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+
+	params := []interface{}{txID, index, true}
+	body, err := json.Marshal(map[string]interface{}{
+		"jsonrpc": "1.0",
+		"id":      "higun-utxo-validation",
+		"method":  "gettxout",
+		"params":  params,
+	})
+	if err != nil {
+		return false, fmt.Errorf("marshal gettxout request: %w", err)
+	}
+
+	url := fmt.Sprintf("http://%s:%s", c.cfg.RPC.Host, c.cfg.RPC.Port)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return false, fmt.Errorf("create gettxout request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.cfg.RPC.User != "" || c.cfg.RPC.Password != "" {
+		req.SetBasicAuth(c.cfg.RPC.User, c.cfg.RPC.Password)
+	}
+
+	httpClient := &http.Client{Timeout: timeout}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("call gettxout %s:%d: %w", txID, index, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false, fmt.Errorf("gettxout %s:%d returned HTTP %d", txID, index, resp.StatusCode)
+	}
+
+	var rpcResp struct {
+		Result json.RawMessage `json:"result"`
+		Error  *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
+		return false, fmt.Errorf("decode gettxout response for %s:%d: %w", txID, index, err)
+	}
+	if rpcResp.Error != nil {
+		return false, fmt.Errorf("gettxout %s:%d rpc error %d: %s", txID, index, rpcResp.Error.Code, rpcResp.Error.Message)
+	}
+	if len(rpcResp.Result) == 0 || strings.TrimSpace(string(rpcResp.Result)) == "null" {
+		return false, nil
+	}
+	return true, nil
+}
+
 func (c *Client) SendRawTransaction(rawTx string) (string, error) {
 	rawTx = strings.TrimSpace(rawTx)
 	if rawTx == "" {

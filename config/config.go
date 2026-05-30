@@ -56,8 +56,11 @@ type Config struct {
 	// 启用此功能要求节点已开启 txindex=1
 	LargeBlockThresholdBytes int64 `yaml:"large_block_threshold_bytes"`
 	// 大区块逐TX拉取时的并发 goroutine 数，默认 20
-	LargeBlockFetchWorkers int       `yaml:"large_block_fetch_workers"`
-	RPC                    RPCConfig `yaml:"rpc"`
+	LargeBlockFetchWorkers          int       `yaml:"large_block_fetch_workers"`
+	UTXOValidationEnabled           bool      `yaml:"utxo_validation_enabled"`
+	UTXOValidationConcurrency       int       `yaml:"utxo_validation_concurrency"`
+	UTXOValidationRPCTimeoutSeconds int       `yaml:"utxo_validation_rpc_timeout_seconds"`
+	RPC                             RPCConfig `yaml:"rpc"`
 }
 
 func (c *Config) GetChainParams() (*chaincfg.Params, error) {
@@ -124,17 +127,20 @@ func LoadConfig(path string) (*Config, error) {
 	flag.Parse()
 	// Default config
 	cfg := &Config{
-		Chain:                    ChainBTC, // 默认 BTC
-		Network:                  "testnet",
-		DataDir:                  "data",
-		BackupDir:                "data/backups",
-		ShardCount:               16,
-		APIPort:                  "8080",
-		ZMQAddress:               []string{"tcp://localhost:28332"},
-		MemPoolCleanStartHeight:  0,                 // 已废弃: 自动判断最新区块时才清理
-		MaxTxPerBatch:            3000,              // Default: process up to 3000 transactions per batch
-		LargeBlockThresholdBytes: 200 * 1024 * 1024, // 200MB，超过此值改用逐TX拉取
-		LargeBlockFetchWorkers:   20,                // 大块逐TX拉取并发数
+		Chain:                           ChainBTC, // 默认 BTC
+		Network:                         "testnet",
+		DataDir:                         "data",
+		BackupDir:                       "data/backups",
+		ShardCount:                      16,
+		APIPort:                         "8080",
+		ZMQAddress:                      []string{"tcp://localhost:28332"},
+		MemPoolCleanStartHeight:         0,                 // 已废弃: 自动判断最新区块时才清理
+		MaxTxPerBatch:                   3000,              // Default: process up to 3000 transactions per batch
+		LargeBlockThresholdBytes:        200 * 1024 * 1024, // 200MB，超过此值改用逐TX拉取
+		LargeBlockFetchWorkers:          20,                // 大块逐TX拉取并发数
+		UTXOValidationEnabled:           true,
+		UTXOValidationConcurrency:       8,
+		UTXOValidationRPCTimeoutSeconds: 3,
 		RPC: RPCConfig{
 			Chain: ChainBTC, // 默认 BTC
 			Host:  "localhost",
@@ -185,6 +191,23 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if port := os.Getenv("RPC_PORT"); port != "" {
 		cfg.RPC.Port = port
+	}
+	if enabled := os.Getenv("UTXO_VALIDATION_ENABLED"); enabled != "" {
+		if val, err := strconv.ParseBool(enabled); err == nil {
+			cfg.UTXOValidationEnabled = val
+		}
+	}
+	if concurrency := os.Getenv("UTXO_VALIDATION_CONCURRENCY"); concurrency != "" {
+		val, err := strconv.Atoi(concurrency)
+		if err == nil && val > 0 {
+			cfg.UTXOValidationConcurrency = val
+		}
+	}
+	if timeout := os.Getenv("UTXO_VALIDATION_RPC_TIMEOUT_SECONDS"); timeout != "" {
+		val, err := strconv.Atoi(timeout)
+		if err == nil && val > 0 {
+			cfg.UTXOValidationRPCTimeoutSeconds = val
+		}
 	}
 	if zmq := os.Getenv("ZMQ_ADDRESS"); zmq != "" {
 		cfg.ZMQAddress = strings.Split(zmq, ",")

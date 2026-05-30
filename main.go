@@ -99,6 +99,7 @@ func main() {
 	if bcClient != nil {
 		wrapper := &blockchainClientWrapper{Client: bcClient}
 		idx.SetBlockchainClient(wrapper)
+		idx.SetConfirmedUTXOValidator(bcClient, cfg.UTXOValidationEnabled, cfg.UTXOValidationConcurrency)
 	}
 
 	// Set mempool manager so indexer can query mempool UTXOs
