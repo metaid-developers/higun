@@ -29,6 +29,10 @@ type ConfirmedUTXOValidator interface {
 	IsUnspent(txID string, index uint32) (bool, error)
 }
 
+type ConfirmedUTXODetailValidator interface {
+	ValidateUTXO(txID string, index uint32, address string, amount uint64) (bool, error)
+}
+
 type UTXOIndexer struct {
 	utxoStore               *storage.PebbleStore
 	addressStore            *storage.PebbleStore
@@ -100,9 +104,12 @@ func (i *UTXOIndexer) SetConfirmedUTXOValidator(validator ConfirmedUTXOValidator
 	i.utxoValidationWorkers = workers
 }
 
-func (i *UTXOIndexer) ValidateConfirmedUTXO(txID string, index uint32) (bool, error) {
+func (i *UTXOIndexer) ValidateConfirmedUTXO(txID string, index uint32, address string, amount uint64) (bool, error) {
 	if i == nil || !i.validateConfirmedUTXOs || i.utxoValidator == nil {
 		return true, nil
+	}
+	if detailValidator, ok := i.utxoValidator.(ConfirmedUTXODetailValidator); ok {
+		return detailValidator.ValidateUTXO(txID, index, address, amount)
 	}
 	return i.utxoValidator.IsUnspent(txID, index)
 }
@@ -953,6 +960,7 @@ func (i *UTXOIndexer) GetLastIndexedHeight() (int, error) {
 type Block struct {
 	Height         int                  `json:"height"`
 	BlockHash      string               `json:"block_hash"`
+	BlockTime      int64                `json:"block_time"`
 	Transactions   []*Transaction       `json:"transactions"`
 	AddressIncome  map[string][]*Income `json:"address_income"`
 	UtxoData       map[string][]string  `json:"utxo_data"`

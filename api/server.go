@@ -733,7 +733,7 @@ func (s *Server) checkUtxo(c *gin.Context) {
 		}
 
 		if utxoInfo.IsExist && utxoInfo.TxConfirm && utxoInfo.SpendStatus == "unspent" {
-			unspent, err := s.isConfirmedOutPointUnspent(outPoint)
+			unspent, err := s.isConfirmedOutPointUnspent(outPoint, utxoInfo.Address, utxoInfo.Value)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"code": -2004, "msg": err.Error()})
 				return
@@ -752,7 +752,7 @@ func (s *Server) checkUtxo(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 2000, "msg": "ok", "data": utxoInfoMap})
 }
 
-func (s *Server) isConfirmedOutPointUnspent(outPoint string) (bool, error) {
+func (s *Server) isConfirmedOutPointUnspent(outPoint string, address string, amount int64) (bool, error) {
 	if s == nil || s.indexer == nil {
 		return true, nil
 	}
@@ -764,5 +764,8 @@ func (s *Server) isConfirmedOutPointUnspent(outPoint string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("parse confirmed outpoint %s: %w", outPoint, err)
 	}
-	return s.indexer.ValidateConfirmedUTXO(arr[0], uint32(vout))
+	if amount < 0 {
+		return false, fmt.Errorf("invalid negative amount for confirmed outpoint %s: %d", outPoint, amount)
+	}
+	return s.indexer.ValidateConfirmedUTXO(arr[0], uint32(vout), address, uint64(amount))
 }

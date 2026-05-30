@@ -346,6 +346,7 @@ func (a *DOGEAdapter) getBlockByTxHashes(verbose1 *dogeBlockVerbose1Result, heig
 	allBlock := &indexer.Block{
 		Height:     height,
 		BlockHash:  verbose1.Hash,
+		BlockTime:  verbose1.Time,
 		UtxoData:   make(map[string][]string),
 		IncomeData: make(map[string][]string),
 		SpendData:  make(map[string][]string),
@@ -432,6 +433,7 @@ func (a *DOGEAdapter) convertToIndexerBlock(msgBlock *wire.MsgBlock, height int,
 	allBlock := &indexer.Block{
 		Height:     height,
 		BlockHash:  blockHash,
+		BlockTime:  blockTime,
 		UtxoData:   make(map[string][]string),
 		IncomeData: make(map[string][]string),
 		SpendData:  make(map[string][]string),

@@ -362,10 +362,10 @@ func (i *UTXOIndexer) GetUTXOs(address string) (result []UTXO, err error) {
 	mempoolCheckTxMap = nil
 	spendMap = nil
 	incomeMap = nil
-	return i.filterConfirmedUTXOsWithValidator(result)
+	return i.filterConfirmedUTXOsWithValidator(address, result)
 }
 
-func (i *UTXOIndexer) filterConfirmedUTXOsWithValidator(utxos []UTXO) ([]UTXO, error) {
+func (i *UTXOIndexer) filterConfirmedUTXOsWithValidator(address string, utxos []UTXO) ([]UTXO, error) {
 	if !i.validateConfirmedUTXOs || i.utxoValidator == nil || len(utxos) == 0 {
 		return utxos, nil
 	}
@@ -415,7 +415,7 @@ func (i *UTXOIndexer) filterConfirmedUTXOsWithValidator(utxos []UTXO) ([]UTXO, e
 					setErr(fmt.Errorf("parse confirmed utxo index %s:%s: %w", utxo.TxID, utxo.Index, parseErr))
 					continue
 				}
-				unspent, validateErr := i.utxoValidator.IsUnspent(utxo.TxID, uint32(vout))
+				unspent, validateErr := i.ValidateConfirmedUTXO(utxo.TxID, uint32(vout), address, utxo.Amount)
 				if validateErr != nil {
 					setErr(fmt.Errorf("validate confirmed utxo %s:%s: %w", utxo.TxID, utxo.Index, validateErr))
 					continue

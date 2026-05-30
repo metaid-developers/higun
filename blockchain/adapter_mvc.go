@@ -205,6 +205,7 @@ func (a *MVCAdapter) getBlockByTxHashes(verbose1 *mvcBlockVerbose1Result, height
 	allBlock := &indexer.Block{
 		Height:     height,
 		BlockHash:  verbose1.Hash,
+		BlockTime:  verbose1.Time,
 		UtxoData:   make(map[string][]string),
 		IncomeData: make(map[string][]string),
 		SpendData:  make(map[string][]string),
@@ -318,6 +319,7 @@ func (a *MVCAdapter) convertToIndexerBlock(msgBlock *bsvwire.MsgBlock, height in
 	allBlock := &indexer.Block{
 		Height:     height,
 		BlockHash:  blockHash,
+		BlockTime:  blockTime,
 		UtxoData:   make(map[string][]string),
 		IncomeData: make(map[string][]string),
 		SpendData:  make(map[string][]string),

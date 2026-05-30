@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"log"
 	"math"
+	"math/big"
 	"net/http"
 	"runtime"
 	"strconv"
@@ -149,14 +150,59 @@ func (c *Client) GetRawTransaction(txHashStr string) (*btcutil.Tx, error) {
 }
 
 func (c *Client) IsUnspent(txID string, index uint32) (bool, error) {
+	txOut, err := c.getTxOut(txID, index)
+	if err != nil {
+		return false, err
+	}
+	return txOut != nil, nil
+}
+
+func (c *Client) ValidateUTXO(txID string, index uint32, address string, amount uint64) (bool, error) {
+	txOut, err := c.getTxOut(txID, index)
+	if err != nil {
+		return false, err
+	}
+	if txOut == nil {
+		return false, nil
+	}
+
+	actualAmount, err := rpcAmountToSatoshis(txOut.Value)
+	if err != nil {
+		return false, fmt.Errorf("parse gettxout value for %s:%d: %w", txID, index, err)
+	}
+	if actualAmount != amount {
+		return false, nil
+	}
+
+	actualAddress := txOut.ScriptPubKey.Address
+	if actualAddress == "" && len(txOut.ScriptPubKey.Addresses) > 0 {
+		actualAddress = txOut.ScriptPubKey.Addresses[0]
+	}
+	if address != "" && address != "errAddress" {
+		if actualAddress == "" || actualAddress != address {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+type getTxOutResult struct {
+	Value        json.Number `json:"value"`
+	ScriptPubKey struct {
+		Address   string   `json:"address"`
+		Addresses []string `json:"addresses"`
+	} `json:"scriptPubKey"`
+}
+
+func (c *Client) getTxOut(txID string, index uint32) (*getTxOutResult, error) {
 	if c == nil || c.cfg == nil {
-		return false, fmt.Errorf("rpc client not initialized")
+		return nil, fmt.Errorf("rpc client not initialized")
 	}
 	if c.cfg.RPC.Host == "" || c.cfg.RPC.Port == "" {
-		return false, fmt.Errorf("rpc host or port not configured")
+		return nil, fmt.Errorf("rpc host or port not configured")
 	}
 	if _, err := chainhash.NewHashFromStr(txID); err != nil {
-		return false, fmt.Errorf("invalid txid %s: %w", txID, err)
+		return nil, fmt.Errorf("invalid txid %s: %w", txID, err)
 	}
 
 	timeout := time.Duration(c.cfg.UTXOValidationRPCTimeoutSeconds) * time.Second
@@ -172,13 +218,13 @@ func (c *Client) IsUnspent(txID string, index uint32) (bool, error) {
 		"params":  params,
 	})
 	if err != nil {
-		return false, fmt.Errorf("marshal gettxout request: %w", err)
+		return nil, fmt.Errorf("marshal gettxout request: %w", err)
 	}
 
 	url := fmt.Sprintf("http://%s:%s", c.cfg.RPC.Host, c.cfg.RPC.Port)
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return false, fmt.Errorf("create gettxout request: %w", err)
+		return nil, fmt.Errorf("create gettxout request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.cfg.RPC.User != "" || c.cfg.RPC.Password != "" {
@@ -188,11 +234,11 @@ func (c *Client) IsUnspent(txID string, index uint32) (bool, error) {
 	httpClient := &http.Client{Timeout: timeout}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("call gettxout %s:%d: %w", txID, index, err)
+		return nil, fmt.Errorf("call gettxout %s:%d: %w", txID, index, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return false, fmt.Errorf("gettxout %s:%d returned HTTP %d", txID, index, resp.StatusCode)
+		return nil, fmt.Errorf("gettxout %s:%d returned HTTP %d", txID, index, resp.StatusCode)
 	}
 
 	var rpcResp struct {
@@ -202,16 +248,51 @@ func (c *Client) IsUnspent(txID string, index uint32) (bool, error) {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
-		return false, fmt.Errorf("decode gettxout response for %s:%d: %w", txID, index, err)
+	decoder := json.NewDecoder(resp.Body)
+	decoder.UseNumber()
+	if err := decoder.Decode(&rpcResp); err != nil {
+		return nil, fmt.Errorf("decode gettxout response for %s:%d: %w", txID, index, err)
 	}
 	if rpcResp.Error != nil {
-		return false, fmt.Errorf("gettxout %s:%d rpc error %d: %s", txID, index, rpcResp.Error.Code, rpcResp.Error.Message)
+		return nil, fmt.Errorf("gettxout %s:%d rpc error %d: %s", txID, index, rpcResp.Error.Code, rpcResp.Error.Message)
 	}
 	if len(rpcResp.Result) == 0 || strings.TrimSpace(string(rpcResp.Result)) == "null" {
-		return false, nil
+		return nil, nil
 	}
-	return true, nil
+	var result getTxOutResult
+	resultDecoder := json.NewDecoder(bytes.NewReader(rpcResp.Result))
+	resultDecoder.UseNumber()
+	if err := resultDecoder.Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode gettxout result for %s:%d: %w", txID, index, err)
+	}
+	return &result, nil
+}
+
+func rpcAmountToSatoshis(value json.Number) (uint64, error) {
+	rat, ok := new(big.Rat).SetString(value.String())
+	if !ok {
+		return 0, fmt.Errorf("invalid decimal %q", value.String())
+	}
+	if rat.Sign() < 0 {
+		return 0, fmt.Errorf("negative decimal %q", value.String())
+	}
+	scaled := new(big.Rat).Mul(rat, big.NewRat(100000000, 1))
+	if scaled.Denom().Cmp(big.NewInt(1)) != 0 {
+		return 0, fmt.Errorf("decimal %q has more than 8 satoshi places", value.String())
+	}
+	if !scaled.Num().IsUint64() {
+		return 0, fmt.Errorf("decimal %q overflows uint64 satoshis", value.String())
+	}
+	return scaled.Num().Uint64(), nil
+}
+
+func blockTimeStringForIndexing(block *indexer.Block) string {
+	if block != nil && block.BlockTime > 0 {
+		return strconv.FormatInt(block.BlockTime, 10)
+	}
+	fallback := time.Now().Unix()
+	log.Printf("[WARN] adapter block missing BlockTime; falling back to current time %d", fallback)
+	return strconv.FormatInt(fallback, 10)
 }
 
 func (c *Client) SendRawTransaction(rawTx string) (string, error) {
@@ -670,7 +751,7 @@ func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight
 		txCount := len(allBlock.Transactions)
 		maxTxPerBatch := config.GlobalConfig.MaxTxPerBatch
 		startIdx := 0
-		blockTimeStr := strconv.FormatInt(time.Now().Unix(), 10) // TODO: 从区块中获取真实时间
+		blockTimeStr := blockTimeStringForIndexing(allBlock)
 
 		for startIdx < txCount {
 			endIdx := startIdx + maxTxPerBatch
@@ -682,6 +763,7 @@ func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight
 			blockPart := &indexer.Block{
 				Height:         height,
 				BlockHash:      allBlock.BlockHash,
+				BlockTime:      allBlock.BlockTime,
 				Transactions:   allBlock.Transactions[startIdx:endIdx],
 				AddressIncome:  make(map[string][]*indexer.Income),
 				IsPartialBlock: endIdx != txCount,

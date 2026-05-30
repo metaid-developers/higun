@@ -14,11 +14,20 @@ import (
 )
 
 type checkUTXOValidatorStub struct {
-	unspent map[string]bool
+	unspent         map[string]bool
+	detailedUnspent map[string]bool
 }
 
 func (v *checkUTXOValidatorStub) IsUnspent(txID string, index uint32) (bool, error) {
 	return v.unspent[txID+":"+strconv.FormatUint(uint64(index), 10)], nil
+}
+
+func (v *checkUTXOValidatorStub) ValidateUTXO(txID string, index uint32, address string, amount uint64) (bool, error) {
+	if v.detailedUnspent == nil {
+		return v.IsUnspent(txID, index)
+	}
+	key := txID + ":" + strconv.FormatUint(uint64(index), 10) + "|" + address + "|" + strconv.FormatUint(amount, 10)
+	return v.detailedUnspent[key], nil
 }
 
 func newCheckUTXOTestServer(t *testing.T, validator indexer.ConfirmedUTXOValidator) (*Server, *storage.PebbleStore, *storage.PebbleStore) {
@@ -114,6 +123,51 @@ func TestCheckUtxoMarksConfirmedOutpointSpentWhenNodeUTXOSetMissing(t *testing.T
 	got := resp.Data[txID+":0"]
 	if got.SpendStatus != "spend" {
 		t.Fatalf("expected stale confirmed outpoint to be marked spend, got %q", got.SpendStatus)
+	}
+	if got.SpendInfo.Where != "block" {
+		t.Fatalf("expected spendInfo.where block, got %q", got.SpendInfo.Where)
+	}
+}
+
+func TestCheckUtxoMarksConfirmedOutpointSpentWhenNodeUTXODetailDiffers(t *testing.T) {
+	const txID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	server, addressStore, utxoStore := newCheckUTXOTestServer(t, &checkUTXOValidatorStub{
+		unspent: map[string]bool{
+			txID + ":0": true,
+		},
+		detailedUnspent: map[string]bool{},
+	})
+	if err := utxoStore.Set([]byte(txID), []byte("addr-check@5000@1700000000")); err != nil {
+		t.Fatalf("seed utxoStore: %v", err)
+	}
+	if err := addressStore.Set([]byte("addr-check"), []byte(txID+"@0@5000@1700000000")); err != nil {
+		t.Fatalf("seed addressStore: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/utxo/check", bytes.NewReader([]byte(`{"outPoints":["`+txID+`:0"]}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data map[string]struct {
+			SpendStatus string `json:"spendStatus"`
+			SpendInfo   struct {
+				Where string `json:"where"`
+			} `json:"spendInfo"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	got := resp.Data[txID+":0"]
+	if got.SpendStatus != "spend" {
+		t.Fatalf("expected detail-mismatched confirmed outpoint to be marked spend, got %q", got.SpendStatus)
 	}
 	if got.SpendInfo.Where != "block" {
 		t.Fatalf("expected spendInfo.where block, got %q", got.SpendInfo.Where)

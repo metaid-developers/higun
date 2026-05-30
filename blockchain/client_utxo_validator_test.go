@@ -69,6 +69,39 @@ func TestClientIsUnspentReturnsFalseForNullGetTxOut(t *testing.T) {
 	}
 }
 
+func TestClientValidateUTXORequiresMatchingAddressAndAmount(t *testing.T) {
+	const txID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"result":{"value":0.94179489,"scriptPubKey":{"addresses":["addr-expected"]},"confirmations":10},"error":null}`))
+	}))
+	defer server.Close()
+
+	client := testRPCClient(t, server.URL)
+	valid, err := client.ValidateUTXO(txID, 1, "addr-expected", 94179489)
+	if err != nil {
+		t.Fatalf("ValidateUTXO exact match: %v", err)
+	}
+	if !valid {
+		t.Fatalf("expected matching address and amount to validate")
+	}
+
+	valid, err = client.ValidateUTXO(txID, 1, "addr-expected", 4933697893434)
+	if err != nil {
+		t.Fatalf("ValidateUTXO amount mismatch: %v", err)
+	}
+	if valid {
+		t.Fatalf("expected amount mismatch to invalidate UTXO")
+	}
+
+	valid, err = client.ValidateUTXO(txID, 1, "addr-other", 94179489)
+	if err != nil {
+		t.Fatalf("ValidateUTXO address mismatch: %v", err)
+	}
+	if valid {
+		t.Fatalf("expected address mismatch to invalidate UTXO")
+	}
+}
+
 func testRPCClient(t *testing.T, rawURL string) *Client {
 	t.Helper()
 	parsedURL, err := url.Parse(rawURL)

@@ -38,8 +38,9 @@ func (m *stubMempoolManager) DeleteMempool() error { return nil }
 func (m *stubMempoolManager) StartMempool() error { return nil }
 
 type stubConfirmedUTXOValidator struct {
-	unspent map[string]bool
-	err     error
+	unspent         map[string]bool
+	detailedUnspent map[string]bool
+	err             error
 }
 
 func (v *stubConfirmedUTXOValidator) IsUnspent(txID string, index uint32) (bool, error) {
@@ -47,6 +48,17 @@ func (v *stubConfirmedUTXOValidator) IsUnspent(txID string, index uint32) (bool,
 		return false, v.err
 	}
 	return v.unspent[txID+":"+strconv.FormatUint(uint64(index), 10)], nil
+}
+
+func (v *stubConfirmedUTXOValidator) ValidateUTXO(txID string, index uint32, address string, amount uint64) (bool, error) {
+	if v.err != nil {
+		return false, v.err
+	}
+	if v.detailedUnspent == nil {
+		return v.IsUnspent(txID, index)
+	}
+	key := txID + ":" + strconv.FormatUint(uint64(index), 10) + "|" + address + "|" + strconv.FormatUint(amount, 10)
+	return v.detailedUnspent[key], nil
 }
 
 func newBalanceIndexTestIndexer(t *testing.T) *UTXOIndexer {
@@ -377,6 +389,33 @@ func TestGetUTXOsFiltersConfirmedOutputsMissingFromNodeUTXOSet(t *testing.T) {
 	}
 	if len(utxos) != 1 {
 		t.Fatalf("expected only 1 RPC-confirmed UTXO, got %d: %+v", len(utxos), utxos)
+	}
+	if utxos[0].TxID != "tx-good" || utxos[0].Index != "1" {
+		t.Fatalf("expected tx-good:1 to remain, got %+v", utxos[0])
+	}
+}
+
+func TestGetUTXOsFiltersConfirmedOutputsWhenNodeUTXODetailDiffers(t *testing.T) {
+	idx := newBalanceIndexTestIndexer(t)
+	if err := idx.addressStore.Set([]byte("addr-rpc-detail"), []byte("tx-shifted@2@4933697893434@1700000000,tx-good@1@6000@1700000001")); err != nil {
+		t.Fatalf("seed addressStore: %v", err)
+	}
+	idx.SetConfirmedUTXOValidator(&stubConfirmedUTXOValidator{
+		unspent: map[string]bool{
+			"tx-shifted:2": true,
+			"tx-good:1":    true,
+		},
+		detailedUnspent: map[string]bool{
+			"tx-good:1|addr-rpc-detail|6000": true,
+		},
+	}, true, 2)
+
+	utxos, err := idx.GetUTXOs("addr-rpc-detail")
+	if err != nil {
+		t.Fatalf("GetUTXOs addr-rpc-detail: %v", err)
+	}
+	if len(utxos) != 1 {
+		t.Fatalf("expected only detail-matched UTXO, got %d: %+v", len(utxos), utxos)
 	}
 	if utxos[0].TxID != "tx-good" || utxos[0].Index != "1" {
 		t.Fatalf("expected tx-good:1 to remain, got %+v", utxos[0])
