@@ -21,6 +21,7 @@ type fakeWalletService struct {
 	balanceCalls   int
 	utxoCalls      int
 	broadcastCalls int
+	txCalls        int
 }
 
 func (s *fakeWalletService) GetBalance(ctx context.Context, chain Chain, address string) (WalletBalance, error) {
@@ -180,10 +181,58 @@ func TestBroadcastHandlerRejectsOversizedBodyBeforeService(t *testing.T) {
 }
 
 func (s *fakeWalletService) GetTransaction(ctx context.Context, chain Chain, txid string) (WalletTxDetail, error) {
+	s.txCalls++
 	if s.err != nil {
 		return WalletTxDetail{}, s.err
 	}
 	return WalletTxDetail{Chain: chain, TxID: txid, Confirmed: true, Confirmations: 1}, nil
+}
+
+func TestTxDetailHandler(t *testing.T) {
+	txid := strings.Repeat("a", 64)
+	router := newHandlerTestRouter(&fakeWalletService{})
+
+	w := performWalletRequest(router, "/wallet/v1/btc/tx/"+txid)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"txid":"`+txid+`"`) {
+		t.Fatalf("response missing txid: %s", w.Body.String())
+	}
+}
+
+func TestTxDetailHandlerSupportsAllV11Chains(t *testing.T) {
+	txid := strings.Repeat("a", 64)
+	router := newHandlerTestRouter(&fakeWalletService{})
+	for _, chain := range []string{"btc", "mvc", "doge"} {
+		t.Run(chain, func(t *testing.T) {
+			w := performWalletRequest(router, "/wallet/v1/"+chain+"/tx/"+txid)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), `"chain":"`+chain+`"`) {
+				t.Fatalf("response missing chain %s: %s", chain, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestTxDetailHandlerRejectsInvalidTxIDBeforeService(t *testing.T) {
+	service := &fakeWalletService{}
+	router := newHandlerTestRouter(service)
+
+	w := performWalletRequest(router, "/wallet/v1/btc/tx/not-a-txid")
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "invalid query parameter") {
+		t.Fatalf("response missing invalid query message: %s", w.Body.String())
+	}
+	if service.txCalls != 0 {
+		t.Fatalf("tx service calls = %d, want 0", service.txCalls)
+	}
 }
 
 func (s *fakeWalletService) GetHistory(ctx context.Context, chain Chain, address string, options HistoryOptions) (WalletHistoryPage, error) {

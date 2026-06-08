@@ -140,6 +140,27 @@ func (g *Gateway) broadcastTransaction(c *gin.Context) {
 	c.JSON(http.StatusOK, NewStandardBroadcastResponse(result))
 }
 
+func (g *Gateway) getTransaction(c *gin.Context) {
+	if !g.ensureService(c) {
+		return
+	}
+	chain, ok := g.parseChain(c)
+	if !ok {
+		return
+	}
+	txid, ok := NormalizeTxID(c.Param("txid"))
+	if !ok {
+		g.writeWalletError(c, NewHTTPWalletError(http.StatusBadRequest, CodeInvalidQuery, "invalid query parameter"))
+		return
+	}
+	detail, err := g.service.GetTransaction(c.Request.Context(), chain, txid)
+	if err != nil {
+		g.writeServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, NewStandardTxDetailResponse(detail))
+}
+
 func (g *Gateway) parseChain(c *gin.Context) (Chain, bool) {
 	chain, ok := NormalizeChain(c.Param("chain"))
 	if !ok {
@@ -219,6 +240,8 @@ func publicServiceError(err *WalletError) *WalletError {
 		message = "broadcast rejected"
 	case CodeFeeRateUnavailable:
 		message = "fee rate unavailable"
+	case CodeTxNotFound:
+		message = "transaction not found"
 	case CodeInternal:
 		message = "internal wallet error"
 	}

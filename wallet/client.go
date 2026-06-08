@@ -45,6 +45,34 @@ type coreBroadcastResponse struct {
 	Msg  string `json:"msg"`
 }
 
+type coreTxDetailResponse struct {
+	TxID          string         `json:"txid"`
+	Confirmed     bool           `json:"confirmed"`
+	Mempool       bool           `json:"mempool"`
+	Confirmations uint64         `json:"confirmations"`
+	Height        *int64         `json:"height"`
+	BlockHash     string         `json:"blockHash"`
+	BlockTime     *int64         `json:"blockTime"`
+	Inputs        []coreTxInput  `json:"inputs"`
+	Outputs       []coreTxOutput `json:"outputs"`
+	FeeSatoshi    *uint64        `json:"feeSatoshi"`
+	Size          int32          `json:"size"`
+	Vsize         int32          `json:"vsize"`
+}
+
+type coreTxInput struct {
+	TxID    string  `json:"txid"`
+	Vout    uint32  `json:"vout"`
+	Address string  `json:"address"`
+	Satoshi *uint64 `json:"satoshi"`
+}
+
+type coreTxOutput struct {
+	Vout    uint32 `json:"vout"`
+	Address string `json:"address"`
+	Satoshi uint64 `json:"satoshi"`
+}
+
 func NewCoreClient(baseURL string, timeout time.Duration) (*CoreClient, error) {
 	trimmed := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if trimmed == "" {
@@ -160,6 +188,19 @@ func (c *CoreClient) BroadcastTransaction(ctx context.Context, chain Chain, rawT
 	return BroadcastResult{Chain: chain, TxID: txid, Accepted: true}, nil
 }
 
+func (c *CoreClient) FetchTransaction(ctx context.Context, chain Chain, txid string) (WalletTxDetail, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/tx/"+txid, nil)
+	if err != nil {
+		return WalletTxDetail{}, NewHTTPWalletError(http.StatusInternalServerError, CodeInternal, "internal wallet error")
+	}
+
+	var payload coreTxDetailResponse
+	if err := c.getJSON(req, &payload); err != nil {
+		return WalletTxDetail{}, err
+	}
+	return normalizeCoreTxDetail(chain, payload)
+}
+
 type logWalletUpstreamOptions struct {
 	RedactBody bool
 }
@@ -180,6 +221,11 @@ func (c *CoreClient) doJSON(req *http.Request, out any, options logWalletUpstrea
 
 	status = resp.StatusCode
 	if resp.StatusCode < http.StatusOK || resp.StatusCode > 299 {
+		if resp.StatusCode == http.StatusNotFound && strings.Contains(req.URL.Path, "/tx/") {
+			errMessage := "transaction not found"
+			logWalletUpstream(req, status, start, errMessage)
+			return NewHTTPWalletError(http.StatusNotFound, CodeTxNotFound, errMessage)
+		}
 		errMessage := fmt.Sprintf("core returned HTTP %d", resp.StatusCode)
 		logWalletUpstream(req, status, start, errMessage)
 		return NewHTTPWalletError(http.StatusBadGateway, CodeCoreUnavailable, errMessage)

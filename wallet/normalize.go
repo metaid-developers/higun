@@ -72,6 +72,51 @@ func NormalizeUTXOs(input []WalletUTXO, opts UTXOOptions) ([]WalletUTXO, error) 
 	return result, nil
 }
 
+func normalizeCoreTxDetail(chain Chain, payload coreTxDetailResponse) (WalletTxDetail, error) {
+	txid, ok := NormalizeTxID(payload.TxID)
+	if !ok {
+		return WalletTxDetail{}, NewHTTPWalletError(http.StatusBadGateway, CodeInvalidUpstream, "invalid upstream response")
+	}
+	if payload.Confirmed && payload.Confirmations == 0 {
+		return WalletTxDetail{}, NewHTTPWalletError(http.StatusBadGateway, CodeInvalidUpstream, "invalid upstream response")
+	}
+	if payload.Mempool && payload.Confirmations != 0 {
+		return WalletTxDetail{}, NewHTTPWalletError(http.StatusBadGateway, CodeInvalidUpstream, "invalid upstream response")
+	}
+
+	detail := WalletTxDetail{
+		Chain:         chain,
+		TxID:          txid,
+		Confirmed:     payload.Confirmed,
+		Mempool:       payload.Mempool,
+		Confirmations: payload.Confirmations,
+		Height:        payload.Height,
+		BlockHash:     payload.BlockHash,
+		BlockTime:     payload.BlockTime,
+		Inputs:        make([]WalletTxInput, 0, len(payload.Inputs)),
+		Outputs:       make([]WalletTxOutput, 0, len(payload.Outputs)),
+		FeeSatoshi:    payload.FeeSatoshi,
+		Size:          payload.Size,
+		Vsize:         payload.Vsize,
+	}
+	for _, in := range payload.Inputs {
+		detail.Inputs = append(detail.Inputs, WalletTxInput{
+			TxID:    in.TxID,
+			Vout:    in.Vout,
+			Address: in.Address,
+			Satoshi: in.Satoshi,
+		})
+	}
+	for _, out := range payload.Outputs {
+		detail.Outputs = append(detail.Outputs, WalletTxOutput{
+			Vout:    out.Vout,
+			Address: out.Address,
+			Satoshi: out.Satoshi,
+		})
+	}
+	return detail, nil
+}
+
 func parseVout(value string) (int, error) {
 	vout, err := strconv.Atoi(value)
 	if err != nil || vout < 0 {

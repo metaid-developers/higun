@@ -60,6 +60,38 @@ type StandardBroadcastData struct {
 	Accepted bool   `json:"accepted"`
 }
 
+type StandardTxDetailData struct {
+	Chain         Chain                  `json:"chain"`
+	TxID          string                 `json:"txid"`
+	Confirmed     bool                   `json:"confirmed"`
+	Mempool       bool                   `json:"mempool"`
+	Confirmations uint64                 `json:"confirmations"`
+	Height        *int64                 `json:"height"`
+	BlockHash     string                 `json:"blockHash"`
+	BlockTime     *int64                 `json:"blockTime"`
+	Inputs        []StandardTxInputItem  `json:"inputs"`
+	Outputs       []StandardTxOutputItem `json:"outputs"`
+	FeeSatoshi    *uint64                `json:"feeSatoshi"`
+	Fee           *string                `json:"fee"`
+	Size          int32                  `json:"size"`
+	Vsize         int32                  `json:"vsize"`
+}
+
+type StandardTxInputItem struct {
+	TxID    string  `json:"txid"`
+	Vout    uint32  `json:"vout"`
+	Address string  `json:"address"`
+	Satoshi *uint64 `json:"satoshi,omitempty"`
+	Amount  string  `json:"amount,omitempty"`
+}
+
+type StandardTxOutputItem struct {
+	Vout    uint32 `json:"vout"`
+	Address string `json:"address"`
+	Satoshi uint64 `json:"satoshi"`
+	Amount  string `json:"amount"`
+}
+
 func Success(data any) Envelope {
 	return Envelope{Code: CodeSuccess, Message: "success", Data: data}
 }
@@ -107,6 +139,53 @@ func NewStandardFeeRateResponse(chain Chain, feeRate FeeRate) Envelope {
 
 func NewStandardBroadcastResponse(result BroadcastResult) Envelope {
 	return Success(StandardBroadcastData{Chain: result.Chain, TxID: result.TxID, Accepted: result.Accepted})
+}
+
+func NewStandardTxDetailResponse(detail WalletTxDetail) Envelope {
+	inputs := make([]StandardTxInputItem, 0, len(detail.Inputs))
+	for _, in := range detail.Inputs {
+		item := StandardTxInputItem{
+			TxID:    in.TxID,
+			Vout:    in.Vout,
+			Address: in.Address,
+			Satoshi: in.Satoshi,
+		}
+		if in.Satoshi != nil {
+			item.Amount = SatoshiToDecimalString(*in.Satoshi)
+		}
+		inputs = append(inputs, item)
+	}
+
+	outputs := make([]StandardTxOutputItem, 0, len(detail.Outputs))
+	for _, out := range detail.Outputs {
+		outputs = append(outputs, StandardTxOutputItem{
+			Vout:    out.Vout,
+			Address: out.Address,
+			Satoshi: out.Satoshi,
+			Amount:  SatoshiToDecimalString(out.Satoshi),
+		})
+	}
+
+	data := StandardTxDetailData{
+		Chain:         detail.Chain,
+		TxID:          detail.TxID,
+		Confirmed:     detail.Confirmed,
+		Mempool:       detail.Mempool,
+		Confirmations: detail.Confirmations,
+		Height:        detail.Height,
+		BlockHash:     detail.BlockHash,
+		BlockTime:     detail.BlockTime,
+		Inputs:        inputs,
+		Outputs:       outputs,
+		FeeSatoshi:    detail.FeeSatoshi,
+		Size:          detail.Size,
+		Vsize:         detail.Vsize,
+	}
+	if detail.FeeSatoshi != nil {
+		fee := SatoshiToDecimalString(*detail.FeeSatoshi)
+		data.Fee = &fee
+	}
+	return Success(data)
 }
 
 func NewStandardUTXOResponse(chain Chain, address string, confirmedOnly bool, sortOrder string, utxos []WalletUTXO) Envelope {
