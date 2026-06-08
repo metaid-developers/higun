@@ -102,6 +102,57 @@ func (s *fakeWalletService) BroadcastTransaction(ctx context.Context, chain Chai
 	return BroadcastResult{Chain: chain, TxID: strings.Repeat("b", 64), Accepted: true}, nil
 }
 
+func TestBroadcastHandler(t *testing.T) {
+	router := newHandlerTestRouter(&fakeWalletService{})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/wallet/v1/btc/tx/broadcast", strings.NewReader(`{"rawTx":"deadbeef"}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"accepted":true`) || !strings.Contains(w.Body.String(), `"txid":"`+strings.Repeat("b", 64)+`"`) {
+		t.Fatalf("unexpected response: %s", w.Body.String())
+	}
+}
+
+func TestBroadcastHandlerSupportsAllV11Chains(t *testing.T) {
+	router := newHandlerTestRouter(&fakeWalletService{})
+	for _, chain := range []string{"btc", "mvc", "doge"} {
+		t.Run(chain, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/wallet/v1/"+chain+"/tx/broadcast", strings.NewReader(`{"rawTx":"deadbeef"}`))
+			req.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), `"chain":"`+chain+`"`) {
+				t.Fatalf("response missing chain %s: %s", chain, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestBroadcastHandlerRejectsInvalidRawTxBeforeService(t *testing.T) {
+	service := &fakeWalletService{}
+	router := newHandlerTestRouter(service)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/wallet/v1/btc/tx/broadcast", strings.NewReader(`{"rawTx":"not-hex"}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "invalid raw transaction") {
+		t.Fatalf("response missing invalid raw transaction: %s", w.Body.String())
+	}
+}
+
 func (s *fakeWalletService) GetTransaction(ctx context.Context, chain Chain, txid string) (WalletTxDetail, error) {
 	if s.err != nil {
 		return WalletTxDetail{}, s.err

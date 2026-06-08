@@ -138,7 +138,12 @@ func (s *GatewayService) GetFeeRate(ctx context.Context, chain Chain) (FeeRate, 
 }
 
 func (s *GatewayService) BroadcastTransaction(ctx context.Context, chain Chain, rawTx string) (BroadcastResult, error) {
-	return BroadcastResult{}, NewHTTPWalletError(http.StatusNotImplemented, CodeInternal, "internal wallet error")
+	client, ok := s.clients[chain]
+	if !ok {
+		return BroadcastResult{}, NewHTTPWalletError(http.StatusServiceUnavailable, CodeCoreUnavailable, "chain core is not configured")
+	}
+	chainCfg := s.chainConfig[chain]
+	return client.BroadcastTransaction(ctx, chain, rawTx, chainCfg.BroadcastPath)
 }
 
 func (s *GatewayService) GetTransaction(ctx context.Context, chain Chain, txid string) (WalletTxDetail, error) {
@@ -151,6 +156,7 @@ func (s *GatewayService) GetHistory(ctx context.Context, chain Chain, address st
 
 func RegisterRoutes(router gin.IRouter, gateway *Gateway) {
 	router.GET("/wallet/v1/:chain/fee-rate", gateway.getFeeRate)
+	router.POST("/wallet/v1/:chain/tx/broadcast", gateway.broadcastTransaction)
 	router.GET("/wallet/v1/:chain/address/:address/balance", gateway.getBalance)
 	router.GET("/wallet/v1/:chain/address/:address/utxos", gateway.getUTXOs)
 }

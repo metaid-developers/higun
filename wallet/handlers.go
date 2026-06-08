@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"strconv"
@@ -8,6 +9,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+type broadcastRequest struct {
+	RawTx string `json:"rawTx"`
+}
 
 func (g *Gateway) getBalance(c *gin.Context) {
 	if !g.ensureService(c) {
@@ -99,6 +104,36 @@ func (g *Gateway) getFeeRate(c *gin.Context) {
 	c.JSON(http.StatusOK, NewStandardFeeRateResponse(chain, feeRate))
 }
 
+func (g *Gateway) broadcastTransaction(c *gin.Context) {
+	if !g.ensureService(c) {
+		return
+	}
+	chain, ok := g.parseChain(c)
+	if !ok {
+		return
+	}
+	var req broadcastRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		g.writeWalletError(c, NewHTTPWalletError(http.StatusBadRequest, CodeInvalidRawTx, "invalid raw transaction"))
+		return
+	}
+	rawTx := strings.TrimSpace(req.RawTx)
+	if rawTx == "" || len(rawTx) > 1_000_000 {
+		g.writeWalletError(c, NewHTTPWalletError(http.StatusBadRequest, CodeInvalidRawTx, "invalid raw transaction"))
+		return
+	}
+	if _, err := hex.DecodeString(rawTx); err != nil {
+		g.writeWalletError(c, NewHTTPWalletError(http.StatusBadRequest, CodeInvalidRawTx, "invalid raw transaction"))
+		return
+	}
+	result, err := g.service.BroadcastTransaction(c.Request.Context(), chain, rawTx)
+	if err != nil {
+		g.writeServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, NewStandardBroadcastResponse(result))
+}
+
 func (g *Gateway) parseChain(c *gin.Context) (Chain, bool) {
 	chain, ok := NormalizeChain(c.Param("chain"))
 	if !ok {
@@ -174,6 +209,8 @@ func publicServiceError(err *WalletError) *WalletError {
 		message = "core unavailable"
 	case CodeInvalidUpstream:
 		message = "invalid upstream response"
+	case CodeBroadcastRejected:
+		message = "broadcast rejected"
 	case CodeFeeRateUnavailable:
 		message = "fee rate unavailable"
 	case CodeInternal:

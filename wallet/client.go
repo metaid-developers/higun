@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -37,6 +38,11 @@ type coreUTXOItem struct {
 	Amount    uint64 `json:"amount"`
 	IsMempool bool   `json:"is_mempool"`
 	Height    *int64 `json:"height,omitempty"`
+}
+
+type coreBroadcastResponse struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
 }
 
 func NewCoreClient(baseURL string, timeout time.Duration) (*CoreClient, error) {
@@ -122,12 +128,52 @@ func (c *CoreClient) FetchUTXOs(ctx context.Context, chain Chain, address string
 	return out, nil
 }
 
+func (c *CoreClient) BroadcastTransaction(ctx context.Context, chain Chain, rawTx string, broadcastPath string) (BroadcastResult, error) {
+	path := strings.TrimSpace(broadcastPath)
+	if path == "" {
+		path = "/btc/broadcast"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	body, err := json.Marshal(map[string]string{"rawTx": rawTx})
+	if err != nil {
+		return BroadcastResult{}, NewHTTPWalletError(http.StatusInternalServerError, CodeInternal, "internal wallet error")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return BroadcastResult{}, NewHTTPWalletError(http.StatusInternalServerError, CodeInternal, "internal wallet error")
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var payload coreBroadcastResponse
+	if err := c.doJSON(req, &payload, logWalletUpstreamOptions{RedactBody: true}); err != nil {
+		return BroadcastResult{}, err
+	}
+	if payload.Code != 2000 {
+		return BroadcastResult{}, NewHTTPWalletError(http.StatusBadGateway, CodeBroadcastRejected, "broadcast rejected")
+	}
+	txid, ok := NormalizeTxID(payload.Msg)
+	if !ok {
+		return BroadcastResult{}, NewHTTPWalletError(http.StatusBadGateway, CodeInvalidUpstream, "invalid upstream response")
+	}
+	return BroadcastResult{Chain: chain, TxID: txid, Accepted: true}, nil
+}
+
+type logWalletUpstreamOptions struct {
+	RedactBody bool
+}
+
 func (c *CoreClient) getJSON(req *http.Request, out any) error {
+	return c.doJSON(req, out, logWalletUpstreamOptions{})
+}
+
+func (c *CoreClient) doJSON(req *http.Request, out any, options logWalletUpstreamOptions) error {
 	start := time.Now()
 	status := 0
 	resp, err := c.client.Do(req)
 	if err != nil {
-		logWalletUpstream(req, status, start, err.Error())
+		logWalletUpstream(req, status, start, sanitizeRawTxError(err.Error(), options.RedactBody))
 		return NewHTTPWalletError(http.StatusBadGateway, CodeCoreUnavailable, err.Error())
 	}
 	defer resp.Body.Close()
@@ -144,4 +190,11 @@ func (c *CoreClient) getJSON(req *http.Request, out any) error {
 	}
 	logWalletUpstream(req, status, start, "")
 	return nil
+}
+
+func sanitizeRawTxError(message string, redact bool) string {
+	if !redact {
+		return message
+	}
+	return "redacted broadcast upstream error"
 }

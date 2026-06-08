@@ -54,6 +54,12 @@ type StandardFeeRateData struct {
 	Default string `json:"default"`
 }
 
+type StandardBroadcastData struct {
+	Chain    Chain  `json:"chain"`
+	TxID     string `json:"txid"`
+	Accepted bool   `json:"accepted"`
+}
+
 func Success(data any) Envelope {
 	return Envelope{Code: CodeSuccess, Message: "success", Data: data}
 }
@@ -97,6 +103,10 @@ func NewStandardFeeRateResponse(chain Chain, feeRate FeeRate) Envelope {
 		Fast:    feeRate.Fast,
 		Default: feeRate.Default,
 	})
+}
+
+func NewStandardBroadcastResponse(result BroadcastResult) Envelope {
+	return Success(StandardBroadcastData{Chain: result.Chain, TxID: result.TxID, Accepted: result.Accepted})
 }
 
 func NewStandardUTXOResponse(chain Chain, address string, confirmedOnly bool, sortOrder string, utxos []WalletUTXO) Envelope {
