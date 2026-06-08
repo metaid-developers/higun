@@ -748,10 +748,14 @@ func filterSortPaginateHistoryTxs(txs []HistoryTx, options HistoryQueryOptions) 
 	})
 
 	total := int64(len(filtered))
-	start := (page - 1) * limit
-	if start >= len(filtered) {
+	if len(filtered) == 0 {
 		return []HistoryTx{}, total
 	}
+	lastPage := 1 + (len(filtered)-1)/limit
+	if page > lastPage {
+		return []HistoryTx{}, total
+	}
+	start := (page - 1) * limit
 	end := start + limit
 	if end > len(filtered) {
 		end = len(filtered)
@@ -767,12 +771,27 @@ func historyConfirmations(isMempool bool) *uint64 {
 	return &confirmations
 }
 
+func validHistoryTxID(txid string) bool {
+	if len(txid) != 64 {
+		return false
+	}
+	for _, ch := range txid {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') && (ch < 'A' || ch > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
 func (i *UTXOIndexer) GetHistoryTxList(address string) (txs []HistoryTx, err error) {
 	addrKey := []byte(address)
 	txMap := make(map[string]*HistoryTx)
 	outpointAmountMap := make(map[string]uint64)
 
 	getTx := func(txid string, ts int64, isMempool bool) *HistoryTx {
+		if !validHistoryTxID(txid) {
+			return nil
+		}
 		if _, ok := txMap[txid]; !ok {
 			txMap[txid] = &HistoryTx{
 				TxID:          txid,
@@ -803,8 +822,9 @@ func (i *UTXOIndexer) GetHistoryTxList(address string) (txs []HistoryTx, err err
 			outpoint := incomes[0] + ":" + incomes[1]
 			outpointAmountMap[outpoint] = amount
 
-			tx := getTx(incomes[0], timestamp, false)
-			tx.Income += amount
+			if tx := getTx(incomes[0], timestamp, false); tx != nil {
+				tx.Income += amount
+			}
 		}
 	}
 
@@ -825,8 +845,9 @@ func (i *UTXOIndexer) GetHistoryTxList(address string) (txs []HistoryTx, err err
 			outpointParts := strings.Split(outpoint, ":")
 			if len(outpointParts) == 2 {
 				outpointAmountMap[outpoint] = amount
-				tx := getTx(outpointParts[0], timestamp, true)
-				tx.Income += amount
+				if tx := getTx(outpointParts[0], timestamp, true); tx != nil {
+					tx.Income += amount
+				}
 			}
 		}
 
@@ -841,12 +862,8 @@ func (i *UTXOIndexer) GetHistoryTxList(address string) (txs []HistoryTx, err err
 
 			amount := outpointAmountMap[outpoint]
 
-			if v != "" {
+			if validHistoryTxID(v) {
 				tx := getTx(v, timestamp, true)
-				tx.Spend += amount
-			} else {
-				fakeTxID := "pending_spend_" + outpoint
-				tx := getTx(fakeTxID, timestamp, true)
 				tx.Spend += amount
 			}
 		}
@@ -869,14 +886,9 @@ func (i *UTXOIndexer) GetHistoryTxList(address string) (txs []HistoryTx, err err
 
 			if len(arr) >= 3 {
 				spendingTxID := arr[2]
-				tx := getTx(spendingTxID, timestamp, false)
-				tx.Spend += amount
-			} else {
-				// Old data without spending TxID
-				// Use outpoint as unique ID to list it
-				fakeTxID := "spend_" + outpoint
-				tx := getTx(fakeTxID, timestamp, false)
-				tx.Spend += amount
+				if tx := getTx(spendingTxID, timestamp, false); tx != nil {
+					tx.Spend += amount
+				}
 			}
 		}
 	}

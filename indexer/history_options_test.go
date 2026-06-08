@@ -1,6 +1,9 @@
 package indexer
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestFilterSortPaginateHistoryTxs(t *testing.T) {
 	in := []HistoryTx{
@@ -32,6 +35,21 @@ func TestFilterSortPaginateHistoryTxs(t *testing.T) {
 	}
 }
 
+func TestFilterSortPaginateHistoryTxsHugePageReturnsEmptyWithTotal(t *testing.T) {
+	in := []HistoryTx{
+		{TxID: "confirmed-old", TimestampUnix: 100, IsMempool: false},
+		{TxID: "confirmed-mid", TimestampUnix: 200, IsMempool: false},
+	}
+
+	got, total := filterSortPaginateHistoryTxs(in, HistoryQueryOptions{Page: int(^uint(0) >> 1), Limit: 20, Sort: "desc"})
+	if total != 2 {
+		t.Fatalf("expected total 2, got %d", total)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected huge page to return empty page, got %+v", got)
+	}
+}
+
 func TestNormalizeHistoryQueryOptions(t *testing.T) {
 	got := normalizeHistoryQueryOptions("0", "500", "true", "ASC")
 	if got.Page != 1 {
@@ -59,5 +77,25 @@ func TestNormalizeHistoryQueryOptions(t *testing.T) {
 	}
 	if got.Sort != "desc" {
 		t.Fatalf("expected sort desc, got %q", got.Sort)
+	}
+}
+
+func TestHistoryTxIDValidationRejectsFakeAndLegacyIDs(t *testing.T) {
+	valid := strings.Repeat("a", 64)
+	if !validHistoryTxID(valid) {
+		t.Fatalf("expected 64-character hex txid to be valid")
+	}
+
+	invalidIDs := []string{
+		"",
+		"spend_" + valid + ":0",
+		"pending_spend_" + valid + ":0",
+		strings.Repeat("a", 63),
+		strings.Repeat("z", 64),
+	}
+	for _, txid := range invalidIDs {
+		if validHistoryTxID(txid) {
+			t.Fatalf("expected invalid history txid %q to be rejected", txid)
+		}
 	}
 }
