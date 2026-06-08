@@ -1,0 +1,1 @@
+{"code":0,"message":"success","data":{"balance":0.00135758,"block":{"incomeFee":0.00135758,"spendFee":0},"mempool":{"incomeFee":0,"spendFee":0},"pendingBalance":0,"safeBalance":0.00000896,"unSafeBalance":0.00134862,"inscriptionsBalance":0,"runesBalance":0,"pinsBalance":0,"mrc20UtxosBalance":0}}
