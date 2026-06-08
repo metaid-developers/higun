@@ -31,6 +31,7 @@ type Server struct {
 	startMempoolFn        func() error
 	initializeMempoolFn   func()
 	startMempoolCleanerFn func()
+	walletGatewayEnabled  bool
 }
 
 func NewServer(indexer *indexer.UTXOIndexer, metaStore *storage.MetaStore, stopCh <-chan struct{}) *Server {
@@ -80,11 +81,15 @@ func (s *Server) EnableWalletGateway(cfg wallet.Config) error {
 	if !cfg.Enabled {
 		return nil
 	}
+	if s.walletGatewayEnabled {
+		return fmt.Errorf("wallet gateway is already enabled")
+	}
 	service, err := wallet.NewGatewayService(cfg)
 	if err != nil {
 		return err
 	}
 	wallet.RegisterRoutes(s.Router, wallet.NewGateway(service))
+	s.walletGatewayEnabled = true
 	return nil
 }
 

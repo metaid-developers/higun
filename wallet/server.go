@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -42,11 +43,18 @@ func NewGatewayService(cfg Config) (*GatewayService, error) {
 		if !chainCfg.Enabled {
 			continue
 		}
+		normalizedChain, ok := NormalizeChain(string(chain))
+		if !ok {
+			continue
+		}
 		client, err := NewCoreClient(chainCfg.CoreURL, cfg.Timeout)
 		if err != nil {
 			return nil, err
 		}
-		clients[chain] = client
+		clients[normalizedChain] = client
+	}
+	if cfg.Enabled && len(clients) == 0 {
+		return nil, fmt.Errorf("wallet gateway enabled but no enabled chains are configured")
 	}
 	return &GatewayService{clients: clients}, nil
 }
