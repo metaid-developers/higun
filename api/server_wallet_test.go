@@ -86,6 +86,16 @@ func TestEnableWalletGatewayRejectsEnabledConfigWithoutUsableChains(t *testing.T
 				},
 			},
 		},
+		{
+			name: "unsupported core url scheme",
+			cfg: wallet.Config{
+				Enabled: true,
+				Timeout: 2 * time.Second,
+				Chains: map[wallet.Chain]wallet.ChainConfig{
+					wallet.ChainBTC: {Enabled: true, CoreURL: "ftp://127.0.0.1:8066"},
+				},
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := NewServer(nil, nil, make(chan struct{}))

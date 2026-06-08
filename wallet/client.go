@@ -48,6 +48,9 @@ func NewCoreClient(baseURL string, timeout time.Duration) (*CoreClient, error) {
 	if err != nil || !parsed.IsAbs() || parsed.Host == "" {
 		return nil, NewHTTPWalletError(http.StatusServiceUnavailable, CodeCoreUnavailable, "core_url must be an absolute URL")
 	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, NewHTTPWalletError(http.StatusServiceUnavailable, CodeCoreUnavailable, "core_url must use http or https")
+	}
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}

@@ -178,3 +178,27 @@ func TestCoreClientReportsInvalidUpstream(t *testing.T) {
 		t.Fatal("expected upstream error")
 	}
 }
+
+func TestCoreClientRejectsUnsupportedURLScheme(t *testing.T) {
+	for _, baseURL := range []string{
+		"ftp://127.0.0.1:8066",
+		"ws://127.0.0.1:8066",
+	} {
+		t.Run(baseURL, func(t *testing.T) {
+			_, err := NewCoreClient(baseURL, 2*time.Second)
+			if err == nil {
+				t.Fatal("NewCoreClient returned nil error")
+			}
+			walletErr, ok := err.(*WalletError)
+			if !ok {
+				t.Fatalf("error = %T, want *WalletError", err)
+			}
+			if walletErr.Code != CodeCoreUnavailable {
+				t.Fatalf("code = %d, want %d", walletErr.Code, CodeCoreUnavailable)
+			}
+			if walletErr.Message != "core_url must use http or https" {
+				t.Fatalf("message = %q, want core_url must use http or https", walletErr.Message)
+			}
+		})
+	}
+}
