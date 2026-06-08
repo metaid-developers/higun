@@ -54,9 +54,10 @@ func (b WalletBalance) SafeSatoshi() uint64 {
 }
 
 func (b WalletBalance) UTXOCount() uint64 {
-	return b.ConfirmedUTXOCount + b.MempoolUTXOCount
+	return saturatingAddUint64(b.ConfirmedUTXOCount, b.MempoolUTXOCount)
 }
 
+// Unconfirmed satoshi deltas are capped to int64 because response models expose signed amounts.
 func uint64DeltaToInt64(income, spend uint64) int64 {
 	if income >= spend {
 		diff := income - spend

@@ -74,7 +74,7 @@ func NormalizeUTXOs(input []WalletUTXO, opts UTXOOptions) ([]WalletUTXO, error) 
 
 func parseVout(value string) (int, error) {
 	vout, err := strconv.Atoi(value)
-	if err != nil {
+	if err != nil || vout < 0 {
 		return 0, NewHTTPWalletError(http.StatusBadGateway, CodeInvalidUpstream, "upstream utxo index is not an integer")
 	}
 	return vout, nil
