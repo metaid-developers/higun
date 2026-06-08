@@ -1,10 +1,13 @@
 package wallet
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -176,6 +179,40 @@ func TestCoreClientReportsInvalidUpstream(t *testing.T) {
 	_, err = client.FetchBalance(context.Background(), ChainBTC, "addr-btc")
 	if err == nil {
 		t.Fatal("expected upstream error")
+	}
+}
+
+func TestCoreClientTransportLogRedactsFullAddress(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("server should be closed before client request")
+	}))
+	server.Close()
+
+	client, err := NewCoreClient(server.URL, 2*time.Second)
+	if err != nil {
+		t.Fatalf("NewCoreClient: %v", err)
+	}
+
+	address := "12ghVWG1yAgNjzXj4mr3qK9DgyornMUikZ"
+	var buf bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(previousOutput)
+
+	_, err = client.FetchBalance(context.Background(), ChainBTC, address)
+	if err == nil {
+		t.Fatal("expected transport error")
+	}
+
+	gotLog := buf.String()
+	if strings.Contains(gotLog, address) {
+		t.Fatalf("log contains full address %q: %s", address, gotLog)
+	}
+	if !strings.Contains(gotLog, truncateAddressForLog(address)) {
+		t.Fatalf("log = %q, want truncated address %q", gotLog, truncateAddressForLog(address))
+	}
+	if !strings.Contains(gotLog, "wallet upstream request") {
+		t.Fatalf("log = %q, want wallet upstream request", gotLog)
 	}
 }
 
