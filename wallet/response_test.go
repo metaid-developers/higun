@@ -51,6 +51,42 @@ func TestStandardUTXOResponse(t *testing.T) {
 	}
 }
 
+func TestStandardUTXOResponseKeepsChainAndAddressTopLevelOnly(t *testing.T) {
+	body := marshalResponse(t, NewStandardUTXOResponse(ChainBTC, "addr", false, "desc", []WalletUTXO{
+		{Chain: ChainBTC, Address: "addr", TxID: "tx", Vout: 1, Satoshi: 1000, Confirmed: false, Mempool: true, Height: int64Ptr(-1)},
+	}))
+
+	var payload struct {
+		Data struct {
+			Chain   Chain             `json:"chain"`
+			Address string            `json:"address"`
+			UTXOs   []json.RawMessage `json:"utxos"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if payload.Data.Chain != ChainBTC {
+		t.Fatalf("top-level chain = %q, want %q; body: %s", payload.Data.Chain, ChainBTC, body)
+	}
+	if payload.Data.Address != "addr" {
+		t.Fatalf("top-level address = %q, want addr; body: %s", payload.Data.Address, body)
+	}
+	if len(payload.Data.UTXOs) != 1 {
+		t.Fatalf("utxo len = %d, want 1; body: %s", len(payload.Data.UTXOs), body)
+	}
+	var item map[string]any
+	if err := json.Unmarshal(payload.Data.UTXOs[0], &item); err != nil {
+		t.Fatalf("Unmarshal item: %v", err)
+	}
+	if _, ok := item["chain"]; ok {
+		t.Fatalf("utxo item should not include chain: %s", string(payload.Data.UTXOs[0]))
+	}
+	if _, ok := item["address"]; ok {
+		t.Fatalf("utxo item should not include address: %s", string(payload.Data.UTXOs[0]))
+	}
+}
+
 func TestStandardUTXOResponseOmitsMissingHeight(t *testing.T) {
 	body := marshalResponse(t, NewStandardUTXOResponse(ChainBTC, "addr", true, "asc", []WalletUTXO{
 		{Chain: ChainBTC, Address: "addr", TxID: "tx", Vout: 1, Satoshi: 1000, Confirmed: true, Mempool: false, Height: nil},

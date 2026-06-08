@@ -34,8 +34,6 @@ type StandardUTXOData struct {
 }
 
 type StandardUTXOItem struct {
-	Chain     Chain  `json:"chain"`
-	Address   string `json:"address"`
 	TxID      string `json:"txid"`
 	Vout      int    `json:"vout"`
 	Outpoint  string `json:"outpoint"`
@@ -83,8 +81,6 @@ func NewStandardUTXOResponse(chain Chain, address string, confirmedOnly bool, so
 	items := make([]StandardUTXOItem, 0, len(utxos))
 	for _, utxo := range utxos {
 		items = append(items, StandardUTXOItem{
-			Chain:     utxo.Chain,
-			Address:   utxo.Address,
 			TxID:      utxo.TxID,
 			Vout:      utxo.Vout,
 			Outpoint:  utxo.Outpoint(),
