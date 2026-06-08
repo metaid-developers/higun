@@ -16,6 +16,7 @@ import (
 	"github.com/metaid/utxo_indexer/indexer"
 	"github.com/metaid/utxo_indexer/mempool"
 	"github.com/metaid/utxo_indexer/storage"
+	"github.com/metaid/utxo_indexer/wallet"
 )
 
 type Server struct {
@@ -73,6 +74,18 @@ func (s *Server) setupRoutes() {
 	s.Router.GET("/blocks/reindex", s.reindexBlocks)
 	// Rich list: addresses sorted by balance descending
 	s.Router.GET("/rich-list", s.getRichList)
+}
+
+func (s *Server) EnableWalletGateway(cfg wallet.Config) error {
+	if !cfg.Enabled {
+		return nil
+	}
+	service, err := wallet.NewGatewayService(cfg)
+	if err != nil {
+		return err
+	}
+	wallet.RegisterRoutes(s.Router, wallet.NewGateway(service))
+	return nil
 }
 
 type broadcastTxReq struct {

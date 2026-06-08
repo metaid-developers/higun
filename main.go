@@ -21,6 +21,7 @@ import (
 	"github.com/metaid/utxo_indexer/mempool"
 	"github.com/metaid/utxo_indexer/storage"
 	"github.com/metaid/utxo_indexer/syslogs"
+	"github.com/metaid/utxo_indexer/wallet"
 )
 
 var ApiServer *api.Server
@@ -109,6 +110,13 @@ func main() {
 	// Pass mempool manager and blockchain client to API server
 	ApiServer = api.NewServer(idx, metaStore, stopCh)
 	ApiServer.SetMempoolManager(mempoolMgr, bcClient)
+	if cfg.Wallet.Enabled {
+		walletCfg := wallet.FromAppConfig(cfg.Wallet)
+		if err := ApiServer.EnableWalletGateway(walletCfg); err != nil {
+			log.Fatalf("Failed to enable wallet gateway: %v", err)
+		}
+		log.Printf("Wallet Gateway enabled")
+	}
 	log.Printf("Starting UTXO indexer API, port: %s", cfg.APIPort)
 	blockindexer.SetRouter(ApiServer)
 	go ApiServer.Start(fmt.Sprintf(":%s", cfg.APIPort))

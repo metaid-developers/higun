@@ -26,3 +26,17 @@ rpc:
   port: "18443"
   user: "test"
   password: "test"
+
+wallet:
+  enabled: false
+  timeout_seconds: 10
+  chains:
+    btc:
+      enabled: false
+      core_url: "http://127.0.0.1:8066"
+    mvc:
+      enabled: false
+      core_url: "http://127.0.0.1:8085"
+    doge:
+      enabled: false
+      core_url: "http://127.0.0.1:8066"

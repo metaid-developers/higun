@@ -26,6 +26,17 @@ type RPCConfig struct {
 	Password string `yaml:"password"`
 }
 
+type WalletGatewayConfig struct {
+	Enabled        bool                                `yaml:"enabled"`
+	TimeoutSeconds int                                 `yaml:"timeout_seconds"`
+	Chains         map[string]WalletGatewayChainConfig `yaml:"chains"`
+}
+
+type WalletGatewayChainConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	CoreURL string `yaml:"core_url"`
+}
+
 var GlobalConfig *Config
 var GlobalNetwork *chaincfg.Params
 
@@ -56,11 +67,12 @@ type Config struct {
 	// 启用此功能要求节点已开启 txindex=1
 	LargeBlockThresholdBytes int64 `yaml:"large_block_threshold_bytes"`
 	// 大区块逐TX拉取时的并发 goroutine 数，默认 20
-	LargeBlockFetchWorkers          int       `yaml:"large_block_fetch_workers"`
-	UTXOValidationEnabled           bool      `yaml:"utxo_validation_enabled"`
-	UTXOValidationConcurrency       int       `yaml:"utxo_validation_concurrency"`
-	UTXOValidationRPCTimeoutSeconds int       `yaml:"utxo_validation_rpc_timeout_seconds"`
-	RPC                             RPCConfig `yaml:"rpc"`
+	LargeBlockFetchWorkers          int                 `yaml:"large_block_fetch_workers"`
+	UTXOValidationEnabled           bool                `yaml:"utxo_validation_enabled"`
+	UTXOValidationConcurrency       int                 `yaml:"utxo_validation_concurrency"`
+	UTXOValidationRPCTimeoutSeconds int                 `yaml:"utxo_validation_rpc_timeout_seconds"`
+	RPC                             RPCConfig           `yaml:"rpc"`
+	Wallet                          WalletGatewayConfig `yaml:"wallet"`
 }
 
 func (c *Config) GetChainParams() (*chaincfg.Params, error) {
@@ -146,6 +158,15 @@ func LoadConfig(path string) (*Config, error) {
 			Host:  "localhost",
 			Port:  "8332",
 		},
+		Wallet: WalletGatewayConfig{
+			Enabled:        false,
+			TimeoutSeconds: 10,
+			Chains: map[string]WalletGatewayChainConfig{
+				ChainBTC:  {Enabled: false, CoreURL: ""},
+				ChainMVC:  {Enabled: false, CoreURL: ""},
+				ChainDOGE: {Enabled: false, CoreURL: ""},
+			},
+		},
 		ZmqReconnectInterval: 5,
 	}
 
@@ -218,6 +239,21 @@ func LoadConfig(path string) (*Config, error) {
 			cfg.MemPoolCleanStartHeight = height
 		}
 	}
+	if enabled := os.Getenv("WALLET_GATEWAY_ENABLED"); enabled != "" {
+		if val, err := strconv.ParseBool(enabled); err == nil {
+			cfg.Wallet.Enabled = val
+		}
+	}
+	if timeout := os.Getenv("WALLET_GATEWAY_TIMEOUT_SECONDS"); timeout != "" {
+		val, err := strconv.Atoi(timeout)
+		if err == nil && val > 0 {
+			cfg.Wallet.TimeoutSeconds = val
+		}
+	}
+	ensureWalletChainConfig(cfg)
+	applyWalletChainEnv(cfg, ChainBTC, "WALLET_BTC_CORE_URL")
+	applyWalletChainEnv(cfg, ChainMVC, "WALLET_MVC_CORE_URL")
+	applyWalletChainEnv(cfg, ChainDOGE, "WALLET_DOGE_CORE_URL")
 	// if maxTxPerBatch := os.Getenv("MAX_TX_PER_BATCH"); maxTxPerBatch != "" {
 	// 	val, err := strconv.Atoi(maxTxPerBatch)
 	// 	if err == nil && val > 0 {
@@ -240,4 +276,29 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	GlobalConfig = cfg
 	return cfg, nil
+}
+
+func ensureWalletChainConfig(cfg *Config) {
+	if cfg.Wallet.TimeoutSeconds <= 0 {
+		cfg.Wallet.TimeoutSeconds = 10
+	}
+	if cfg.Wallet.Chains == nil {
+		cfg.Wallet.Chains = make(map[string]WalletGatewayChainConfig)
+	}
+	for _, chain := range []string{ChainBTC, ChainMVC, ChainDOGE} {
+		if _, exists := cfg.Wallet.Chains[chain]; !exists {
+			cfg.Wallet.Chains[chain] = WalletGatewayChainConfig{}
+		}
+	}
+}
+
+func applyWalletChainEnv(cfg *Config, chain string, envName string) {
+	value := strings.TrimSpace(os.Getenv(envName))
+	if value == "" {
+		return
+	}
+	chainCfg := cfg.Wallet.Chains[chain]
+	chainCfg.Enabled = true
+	chainCfg.CoreURL = value
+	cfg.Wallet.Chains[chain] = chainCfg
 }
