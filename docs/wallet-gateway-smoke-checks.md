@@ -1,6 +1,13 @@
 # Wallet Gateway Smoke Checks
 
-Use these checks after enabling `wallet.enabled: true`.
+Use these checks before publishing a Wallet Gateway configuration.
+
+## Prerequisites
+
+- `wallet.enabled: true` must be set.
+- At least one `wallet.chains.<chain>.enabled: true` entry must have a valid absolute `core_url`, or the matching `WALLET_<CHAIN>_CORE_URL` environment variable must be set.
+- The local gateway URL examples assume API port `3001`; adjust them if `api_port` differs.
+- The `BTC_CORE`, `MVC_CORE`, and `DOGE_CORE` variables below must match the enabled gateway config.
 
 ## Upstream Core Health
 
@@ -9,8 +16,10 @@ Set the core URLs used by this gateway:
 ```bash
 BTC_CORE='http://127.0.0.1:8066'
 MVC_CORE='http://127.0.0.1:8085'
-DOGE_CORE='http://127.0.0.1:8066'
+DOGE_CORE='http://127.0.0.1:<doge-core-port>'
 ```
+
+Replace `DOGE_CORE` with the DOGE Higun core URL from the enabled gateway config.
 
 Check each configured core before checking the gateway:
 
@@ -86,6 +95,13 @@ DOGE UTXOs, confirmed only:
 curl -sS 'http://127.0.0.1:3001/wallet/v1/doge/address/DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L/utxos?confirmedOnly=true'
 ```
 
+For smoke validation, verify HTTP status `200` and response `.code == 0` for gateway responses. Concise patterns are:
+
+```bash
+curl -sS -w '\nHTTP %{http_code}\n' 'http://127.0.0.1:3001/wallet/v1/btc/address/12ghVWG1yAgNjzXj4mr3qK9DgyornMUikZ/balance'
+curl -sS 'http://127.0.0.1:3001/wallet/v1/btc/address/12ghVWG1yAgNjzXj4mr3qK9DgyornMUikZ/balance' | jq '.code, .message'
+```
+
 ## Metalet Compatibility Responses
 
 BTC balance compatibility:
@@ -94,16 +110,37 @@ BTC balance compatibility:
 curl -sS 'http://127.0.0.1:3001/wallet/v1/btc/address/12ghVWG1yAgNjzXj4mr3qK9DgyornMUikZ/balance?format=metalet'
 ```
 
+BTC UTXO compatibility:
+
+```bash
+curl -sS 'http://127.0.0.1:3001/wallet/v1/btc/address/12ghVWG1yAgNjzXj4mr3qK9DgyornMUikZ/utxos?format=metalet'
+curl -sS 'http://127.0.0.1:3001/wallet/v1/btc/address/12ghVWG1yAgNjzXj4mr3qK9DgyornMUikZ/utxos?format=metalet&confirmedOnly=true'
+```
+
 MVC balance compatibility:
 
 ```bash
 curl -sS 'http://127.0.0.1:3001/wallet/v1/mvc/address/1D4qt4KHvCbEQLGZvQSsPbsuHKAKnUxLjK/balance?format=metalet'
 ```
 
+MVC UTXO compatibility:
+
+```bash
+curl -sS 'http://127.0.0.1:3001/wallet/v1/mvc/address/1D4qt4KHvCbEQLGZvQSsPbsuHKAKnUxLjK/utxos?format=metalet'
+curl -sS 'http://127.0.0.1:3001/wallet/v1/mvc/address/1D4qt4KHvCbEQLGZvQSsPbsuHKAKnUxLjK/utxos?format=metalet&confirmedOnly=true'
+```
+
 DOGE balance compatibility:
 
 ```bash
 curl -sS 'http://127.0.0.1:3001/wallet/v1/doge/address/DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L/balance?format=metalet'
+```
+
+DOGE UTXO compatibility:
+
+```bash
+curl -sS 'http://127.0.0.1:3001/wallet/v1/doge/address/DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L/utxos?format=metalet'
+curl -sS 'http://127.0.0.1:3001/wallet/v1/doge/address/DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L/utxos?format=metalet&confirmedOnly=true'
 ```
 
 ## Comparison Targets
@@ -128,10 +165,12 @@ Expected checks:
 
 ## Log Checks
 
-While running the curl commands, check the Higun process logs for wallet upstream lines:
+While running the curl commands, check the active Higun process log source for wallet upstream lines. Replace `higun.log` with the active log source, such as `journalctl -u <service>` or `docker logs <container>`.
 
 ```bash
 rg 'wallet upstream request' higun.log
+journalctl -u <service> | rg 'wallet upstream request'
+docker logs <container> 2>&1 | rg 'wallet upstream request'
 ```
 
 Expected log properties:
