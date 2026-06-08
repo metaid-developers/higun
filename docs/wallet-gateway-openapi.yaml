@@ -1,0 +1,950 @@
+openapi: 3.0.3
+info:
+  title: Higun Wallet Gateway API
+  version: 1.1.0
+  description: |
+    Public wallet APIs for applications that integrate directly with Higun.
+    Supported base chains are BTC, MVC, and DOGE.
+
+    Wallet Gateway v1.1 returns standard JSON envelopes. The legacy
+    `format=metalet` compatibility mode is available only on balance and UTXO
+    endpoints and is not modeled as the default downstream contract here.
+servers:
+  - url: http://127.0.0.1:3001
+    description: Local Higun API server
+tags:
+  - name: Wallet
+    description: Base-chain wallet balance, UTXO, transaction, history, and fee-rate APIs.
+
+paths:
+  /wallet/v1/{chain}/address/{address}/balance:
+    get:
+      tags:
+        - Wallet
+      summary: Get address balance
+      description: Returns confirmed balance plus mempool income/spend fields. Amount fields are exposed both as satoshi integers and decimal strings.
+      operationId: getWalletBalance
+      parameters:
+        - $ref: '#/components/parameters/Chain'
+        - $ref: '#/components/parameters/Address'
+        - $ref: '#/components/parameters/Format'
+      responses:
+        '200':
+          description: Balance response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceEnvelope'
+              examples:
+                success:
+                  value:
+                    code: 0
+                    message: success
+                    data:
+                      chain: btc
+                      address: 12ghVWG1yAgNjzXj4mr3qK9DgyornMUikZ
+                      confirmedSatoshi: 100000
+                      unconfirmedSatoshi: 5000
+                      mempoolIncomeSatoshi: 5000
+                      mempoolSpendSatoshi: 0
+                      unsafeSatoshi: 0
+                      safeSatoshi: 105000
+                      utxoCount: 3
+                      confirmed: '0.00100000'
+                      unconfirmed: '0.00005000'
+                      mempoolIncome: '0.00005000'
+                      mempoolSpend: '0'
+                      unsafe: '0'
+                      safe: '0.00105000'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/UnsupportedChain'
+        '502':
+          $ref: '#/components/responses/CoreUnavailable'
+        '503':
+          $ref: '#/components/responses/ChainNotConfigured'
+
+  /wallet/v1/{chain}/address/{address}/utxos:
+    get:
+      tags:
+        - Wallet
+      summary: Get address UTXOs
+      description: Returns spendable UTXOs for transaction construction. Confirmed and mempool UTXOs are merged by default; use `confirmedOnly=true` only when the caller needs confirmed UTXOs. This endpoint is not guaranteed to return every UTXO held by the address. On BTC, small carrier UTXOs at or below 1000 sat may hold MetaID PIN, Ordinals, or similar assets and are protected from the spendable set by default.
+      operationId: getWalletUTXOs
+      parameters:
+        - $ref: '#/components/parameters/Chain'
+        - $ref: '#/components/parameters/Address'
+        - $ref: '#/components/parameters/ConfirmedOnly'
+        - $ref: '#/components/parameters/Sort'
+        - $ref: '#/components/parameters/Format'
+      responses:
+        '200':
+          description: UTXO response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UTXOEnvelope'
+              examples:
+                success:
+                  value:
+                    code: 0
+                    message: success
+                    data:
+                      chain: btc
+                      address: 12ghVWG1yAgNjzXj4mr3qK9DgyornMUikZ
+                      confirmedOnly: false
+                      sort: desc
+                      total: 2
+                      utxos:
+                        - txid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                          vout: 0
+                          outpoint: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:0
+                          satoshi: 100000
+                          amount: '0.00100000'
+                          confirmed: true
+                          mempool: false
+                          height: 840000
+                        - txid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                          vout: 1
+                          outpoint: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:1
+                          satoshi: 5000
+                          amount: '0.00005000'
+                          confirmed: false
+                          mempool: true
+                          height: -1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/UnsupportedChain'
+        '502':
+          $ref: '#/components/responses/CoreUnavailable'
+        '503':
+          $ref: '#/components/responses/ChainNotConfigured'
+
+  /wallet/v1/{chain}/fee-rate:
+    get:
+      tags:
+        - Wallet
+      summary: Get configured fee rates
+      description: Returns config-backed fee-rate tiers. Downstream applications should read this endpoint instead of shipping their own fee-rate config.
+      operationId: getWalletFeeRate
+      parameters:
+        - $ref: '#/components/parameters/Chain'
+      responses:
+        '200':
+          description: Fee-rate response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeeRateEnvelope'
+              examples:
+                success:
+                  value:
+                    code: 0
+                    message: success
+                    data:
+                      chain: btc
+                      source: config
+                      unit: sat_per_byte
+                      slow: 1
+                      normal: 3
+                      fast: 5
+                      default: normal
+        '404':
+          $ref: '#/components/responses/UnsupportedChain'
+        '500':
+          $ref: '#/components/responses/FeeRateUnavailable'
+        '503':
+          $ref: '#/components/responses/ChainNotConfigured'
+
+  /wallet/v1/{chain}/tx/broadcast:
+    post:
+      tags:
+        - Wallet
+      summary: Broadcast signed raw transaction
+      description: Broadcasts a caller-signed raw transaction. Higun does not sign, mutate, store, or log the raw transaction body.
+      operationId: broadcastWalletTransaction
+      parameters:
+        - $ref: '#/components/parameters/Chain'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BroadcastRequest'
+            examples:
+              request:
+                value:
+                  rawTx: '0200000001...'
+      responses:
+        '200':
+          description: Broadcast accepted by the configured chain core.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BroadcastEnvelope'
+              examples:
+                accepted:
+                  value:
+                    code: 0
+                    message: success
+                    data:
+                      chain: btc
+                      txid: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+                      accepted: true
+        '400':
+          description: Invalid raw transaction request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                invalidRawTx:
+                  value:
+                    code: -4004
+                    message: invalid raw transaction
+                    data: null
+        '404':
+          $ref: '#/components/responses/UnsupportedChain'
+        '502':
+          description: Upstream rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                rejected:
+                  value:
+                    code: -5004
+                    message: broadcast rejected
+                    data: null
+                unavailable:
+                  value:
+                    code: -5001
+                    message: core unavailable
+                    data: null
+        '503':
+          $ref: '#/components/responses/ChainNotConfigured'
+
+  /wallet/v1/{chain}/tx/{txid}:
+    get:
+      tags:
+        - Wallet
+      summary: Get transaction detail and confirmation status
+      description: Returns transaction inputs, outputs, fee, and confirmation state. For MVC, public history txids are preserved in responses while the core may resolve an internal node txid alias.
+      operationId: getWalletTransaction
+      parameters:
+        - $ref: '#/components/parameters/Chain'
+        - $ref: '#/components/parameters/TxID'
+      responses:
+        '200':
+          description: Transaction detail response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TxDetailEnvelope'
+              examples:
+                confirmed:
+                  value:
+                    code: 0
+                    message: success
+                    data:
+                      chain: btc
+                      txid: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+                      confirmed: true
+                      mempool: false
+                      confirmations: 12
+                      height: 840000
+                      blockHash: 0000000000000000000000000000000000000000000000000000000000000000
+                      blockTime: 1717833600
+                      inputs:
+                        - txid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                          vout: 0
+                          address: 12ghVWG1yAgNjzXj4mr3qK9DgyornMUikZ
+                          satoshi: 100000
+                          amount: '0.00100000'
+                      outputs:
+                        - vout: 0
+                          address: 1BoatSLRHtKNngkdXEeobR76b53LETtpyT
+                          satoshi: 90000
+                          amount: '0.00090000'
+                      feeSatoshi: 10000
+                      fee: '0.00010000'
+                      size: 225
+                      vsize: 225
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: Unsupported chain or transaction not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                txNotFound:
+                  value:
+                    code: -4041
+                    message: transaction not found
+                    data: null
+                unsupportedChain:
+                  value:
+                    code: -4001
+                    message: unsupported chain
+                    data: null
+        '502':
+          $ref: '#/components/responses/CoreUnavailable'
+        '503':
+          $ref: '#/components/responses/ChainNotConfigured'
+
+  /wallet/v1/{chain}/address/{address}/history:
+    get:
+      tags:
+        - Wallet
+      summary: Get address transaction history
+      description: Returns paginated transaction history. Mempool/unconfirmed items are included by default.
+      operationId: getWalletAddressHistory
+      parameters:
+        - $ref: '#/components/parameters/Chain'
+        - $ref: '#/components/parameters/Address'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/ConfirmedOnly'
+        - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Address history response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryEnvelope'
+              examples:
+                success:
+                  value:
+                    code: 0
+                    message: success
+                    data:
+                      chain: btc
+                      address: 12ghVWG1yAgNjzXj4mr3qK9DgyornMUikZ
+                      page: 1
+                      limit: 20
+                      confirmedOnly: false
+                      sort: desc
+                      total: 1
+                      items:
+                        - txid: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+                          direction: income
+                          incomeSatoshi: 100000
+                          spendSatoshi: 0
+                          netSatoshi: 100000
+                          income: '0.00100000'
+                          spend: '0'
+                          net: '0.00100000'
+                          confirmed: false
+                          mempool: true
+                          confirmations: 0
+                          height: null
+                          timestamp: 1717833600
+                          time: '2026-06-08 12:00:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/UnsupportedChain'
+        '502':
+          $ref: '#/components/responses/CoreUnavailable'
+        '503':
+          $ref: '#/components/responses/ChainNotConfigured'
+
+components:
+  parameters:
+    Chain:
+      name: chain
+      in: path
+      required: true
+      description: Base chain.
+      schema:
+        $ref: '#/components/schemas/Chain'
+    Address:
+      name: address
+      in: path
+      required: true
+      description: Chain address.
+      schema:
+        type: string
+        minLength: 1
+    TxID:
+      name: txid
+      in: path
+      required: true
+      description: 64-character lowercase or uppercase transaction id hex string.
+      schema:
+        type: string
+        pattern: '^[0-9a-fA-F]{64}$'
+    ConfirmedOnly:
+      name: confirmedOnly
+      in: query
+      required: false
+      description: When true, excludes mempool/unconfirmed items. Default is false.
+      schema:
+        type: boolean
+        default: false
+    Sort:
+      name: sort
+      in: query
+      required: false
+      description: Sort order. UTXOs are sorted by amount; history is sorted by time/height from the core.
+      schema:
+        type: string
+        enum:
+          - desc
+          - asc
+        default: desc
+    Format:
+      name: format
+      in: query
+      required: false
+      description: Standard is the public downstream contract. Metalet is a compatibility mode only for old migration paths.
+      schema:
+        type: string
+        enum:
+          - standard
+          - metalet
+        default: standard
+    Page:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  responses:
+    BadRequest:
+      description: Invalid request.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            invalidQuery:
+              value:
+                code: -4003
+                message: invalid query parameter
+                data: null
+    UnsupportedChain:
+      description: Unsupported chain.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            unsupportedChain:
+              value:
+                code: -4001
+                message: unsupported chain
+                data: null
+    CoreUnavailable:
+      description: Upstream core unavailable or invalid upstream response.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            coreUnavailable:
+              value:
+                code: -5001
+                message: core unavailable
+                data: null
+            invalidUpstream:
+              value:
+                code: -5002
+                message: invalid upstream response
+                data: null
+    ChainNotConfigured:
+      description: Chain is supported but not enabled/configured in this gateway.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            chainNotConfigured:
+              value:
+                code: -5001
+                message: core unavailable
+                data: null
+    FeeRateUnavailable:
+      description: Fee-rate configuration is unavailable at runtime.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            feeRateUnavailable:
+              value:
+                code: -5005
+                message: fee rate unavailable
+                data: null
+
+  schemas:
+    Chain:
+      type: string
+      enum:
+        - btc
+        - mvc
+        - doge
+
+    BaseEnvelope:
+      type: object
+      required:
+        - code
+        - message
+        - data
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+        data:
+          nullable: true
+
+    ErrorEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/BaseEnvelope'
+        - type: object
+          properties:
+            data:
+              nullable: true
+              example: null
+
+    BalanceEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/BaseEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/BalanceData'
+
+    BalanceData:
+      type: object
+      required:
+        - chain
+        - address
+        - confirmedSatoshi
+        - unconfirmedSatoshi
+        - mempoolIncomeSatoshi
+        - mempoolSpendSatoshi
+        - unsafeSatoshi
+        - safeSatoshi
+        - utxoCount
+        - confirmed
+        - unconfirmed
+        - mempoolIncome
+        - mempoolSpend
+        - unsafe
+        - safe
+      properties:
+        chain:
+          $ref: '#/components/schemas/Chain'
+        address:
+          type: string
+        confirmedSatoshi:
+          type: integer
+          format: uint64
+        unconfirmedSatoshi:
+          type: integer
+          format: int64
+          description: Mempool income minus mempool spend.
+        mempoolIncomeSatoshi:
+          type: integer
+          format: uint64
+        mempoolSpendSatoshi:
+          type: integer
+          format: uint64
+        unsafeSatoshi:
+          type: integer
+          format: uint64
+        safeSatoshi:
+          type: integer
+          format: uint64
+        utxoCount:
+          type: integer
+          format: uint64
+          description: Underlying address UTXO count reported by the chain core. This may differ from the spendable UTXO list returned by `/utxos`, especially when BTC small asset-carrier UTXOs are protected.
+        confirmed:
+          type: string
+        unconfirmed:
+          type: string
+        mempoolIncome:
+          type: string
+        mempoolSpend:
+          type: string
+        unsafe:
+          type: string
+        safe:
+          type: string
+
+    UTXOEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/BaseEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/UTXOData'
+
+    UTXOData:
+      type: object
+      required:
+        - chain
+        - address
+        - confirmedOnly
+        - sort
+        - total
+        - utxos
+      properties:
+        chain:
+          $ref: '#/components/schemas/Chain'
+        address:
+          type: string
+        confirmedOnly:
+          type: boolean
+        sort:
+          type: string
+          enum:
+            - desc
+            - asc
+        total:
+          type: integer
+        utxos:
+          type: array
+          description: Spendable UTXOs for transaction construction. On BTC, protected small asset-carrier UTXOs may be excluded.
+          items:
+            $ref: '#/components/schemas/UTXOItem'
+
+    UTXOItem:
+      type: object
+      required:
+        - txid
+        - vout
+        - outpoint
+        - satoshi
+        - amount
+        - confirmed
+        - mempool
+      properties:
+        txid:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        vout:
+          type: integer
+        outpoint:
+          type: string
+        satoshi:
+          type: integer
+          format: uint64
+        amount:
+          type: string
+        confirmed:
+          type: boolean
+        mempool:
+          type: boolean
+        height:
+          type: integer
+          nullable: true
+
+    FeeRateEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/BaseEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/FeeRateData'
+
+    FeeRateData:
+      type: object
+      required:
+        - chain
+        - source
+        - unit
+        - slow
+        - normal
+        - fast
+        - default
+      properties:
+        chain:
+          $ref: '#/components/schemas/Chain'
+        source:
+          type: string
+          enum:
+            - config
+        unit:
+          type: string
+          enum:
+            - sat_per_byte
+        slow:
+          type: integer
+          minimum: 1
+        normal:
+          type: integer
+          minimum: 1
+        fast:
+          type: integer
+          minimum: 1
+        default:
+          type: string
+          enum:
+            - slow
+            - normal
+            - fast
+
+    BroadcastRequest:
+      type: object
+      required:
+        - rawTx
+      properties:
+        rawTx:
+          type: string
+          maxLength: 1000000
+          pattern: '^[0-9a-fA-F]+$'
+          description: Caller-signed raw transaction hex.
+
+    BroadcastEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/BaseEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/BroadcastData'
+
+    BroadcastData:
+      type: object
+      required:
+        - chain
+        - txid
+        - accepted
+      properties:
+        chain:
+          $ref: '#/components/schemas/Chain'
+        txid:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        accepted:
+          type: boolean
+
+    TxDetailEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/BaseEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/TxDetailData'
+
+    TxDetailData:
+      type: object
+      required:
+        - chain
+        - txid
+        - confirmed
+        - mempool
+        - confirmations
+        - height
+        - blockHash
+        - blockTime
+        - inputs
+        - outputs
+        - feeSatoshi
+        - fee
+        - size
+        - vsize
+      properties:
+        chain:
+          $ref: '#/components/schemas/Chain'
+        txid:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        confirmed:
+          type: boolean
+        mempool:
+          type: boolean
+        confirmations:
+          type: integer
+          format: uint64
+        height:
+          type: integer
+          nullable: true
+        blockHash:
+          type: string
+        blockTime:
+          type: integer
+          nullable: true
+        inputs:
+          type: array
+          items:
+            $ref: '#/components/schemas/TxInput'
+        outputs:
+          type: array
+          items:
+            $ref: '#/components/schemas/TxOutput'
+        feeSatoshi:
+          type: integer
+          format: uint64
+          nullable: true
+        fee:
+          type: string
+          nullable: true
+        size:
+          type: integer
+        vsize:
+          type: integer
+
+    TxInput:
+      type: object
+      required:
+        - txid
+        - vout
+        - address
+      properties:
+        txid:
+          type: string
+        vout:
+          type: integer
+          format: uint32
+        address:
+          type: string
+        satoshi:
+          type: integer
+          format: uint64
+          nullable: true
+        amount:
+          type: string
+        coinbase:
+          type: string
+
+    TxOutput:
+      type: object
+      required:
+        - vout
+        - address
+        - satoshi
+        - amount
+      properties:
+        vout:
+          type: integer
+          format: uint32
+        address:
+          type: string
+        satoshi:
+          type: integer
+          format: uint64
+        amount:
+          type: string
+
+    HistoryEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/BaseEnvelope'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/HistoryData'
+
+    HistoryData:
+      type: object
+      required:
+        - chain
+        - address
+        - page
+        - limit
+        - confirmedOnly
+        - sort
+        - total
+        - items
+      properties:
+        chain:
+          $ref: '#/components/schemas/Chain'
+        address:
+          type: string
+        page:
+          type: integer
+        limit:
+          type: integer
+        confirmedOnly:
+          type: boolean
+        sort:
+          type: string
+          enum:
+            - desc
+            - asc
+        total:
+          type: integer
+          format: int64
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/HistoryItem'
+
+    HistoryItem:
+      type: object
+      required:
+        - txid
+        - direction
+        - incomeSatoshi
+        - spendSatoshi
+        - netSatoshi
+        - income
+        - spend
+        - net
+        - confirmed
+        - mempool
+        - confirmations
+        - height
+        - timestamp
+        - time
+      properties:
+        txid:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        direction:
+          type: string
+          enum:
+            - income
+            - spend
+            - mixed
+        incomeSatoshi:
+          type: integer
+          format: uint64
+        spendSatoshi:
+          type: integer
+          format: uint64
+        netSatoshi:
+          type: integer
+          description: Signed value equal to incomeSatoshi minus spendSatoshi.
+        income:
+          type: string
+        spend:
+          type: string
+        net:
+          type: string
+        confirmed:
+          type: boolean
+        mempool:
+          type: boolean
+        confirmations:
+          type: integer
+          nullable: true
+        height:
+          type: integer
+          nullable: true
+        timestamp:
+          type: integer
+          format: int64
+        time:
+          type: string
