@@ -34,11 +34,23 @@ import (
 )
 
 type Client struct {
-	rpcClient *rpcclient.Client
-	Rpc       *rpcclient.Client
-	cfg       *config.Config
-	params    *chaincfg.Params
-	adapter   ChainAdapter // New: Chain adapter
+	rpcClient         *rpcclient.Client
+	Rpc               *rpcclient.Client
+	cfg               *config.Config
+	params            *chaincfg.Params
+	adapter           ChainAdapter // New: Chain adapter
+	txIDAliasResolver TxIDAliasResolver
+}
+
+type TxIDAliasResolver interface {
+	ResolveTxIDAlias(txid string) (string, bool, error)
+}
+
+func (c *Client) SetTxIDAliasResolver(resolver TxIDAliasResolver) {
+	if c == nil {
+		return
+	}
+	c.txIDAliasResolver = resolver
 }
 
 // GetBlockByHeight wraps adapter's GetBlock for indexer warmup
@@ -289,7 +301,31 @@ func (c *Client) GetRawTransaction(txHashStr string) (*btcutil.Tx, error) {
 }
 
 func (c *Client) GetTransactionDetail(txid string) (*TxDetail, error) {
-	txHash, err := chainhash.NewHashFromStr(strings.TrimSpace(txid))
+	requestedTxID := strings.ToLower(strings.TrimSpace(txid))
+	detail, err := c.getTransactionDetailByTxID(requestedTxID)
+	if err == nil {
+		return detail, nil
+	}
+	if !errors.Is(err, ErrTransactionNotFound) {
+		return nil, err
+	}
+	aliasTxID, ok, resolveErr := c.resolveMVCTxIDAlias(requestedTxID)
+	if resolveErr != nil {
+		return nil, fmt.Errorf("resolve mvc txid alias: %w", resolveErr)
+	}
+	if !ok {
+		return nil, err
+	}
+	detail, aliasErr := c.getTransactionDetailByTxID(aliasTxID)
+	if aliasErr != nil {
+		return nil, aliasErr
+	}
+	detail.TxID = requestedTxID
+	return detail, nil
+}
+
+func (c *Client) getTransactionDetailByTxID(txid string) (*TxDetail, error) {
+	txHash, err := chainhash.NewHashFromStr(txid)
 	if err != nil {
 		return nil, fmt.Errorf("invalid txid: %w", err)
 	}
@@ -312,6 +348,24 @@ func (c *Client) GetTransactionDetail(txid string) (*TxDetail, error) {
 		return nil, err
 	}
 	return txDetailFromRawJSON(raw)
+}
+
+func (c *Client) resolveMVCTxIDAlias(txid string) (string, bool, error) {
+	if c == nil || c.cfg == nil || c.cfg.Chain != config.ChainMVC || c.txIDAliasResolver == nil {
+		return "", false, nil
+	}
+	aliasTxID, ok, err := c.txIDAliasResolver.ResolveTxIDAlias(txid)
+	if err != nil || !ok {
+		return "", false, err
+	}
+	aliasTxID = strings.ToLower(strings.TrimSpace(aliasTxID))
+	if aliasTxID == "" || aliasTxID == txid {
+		return "", false, nil
+	}
+	if _, err := chainhash.NewHashFromStr(aliasTxID); err != nil {
+		return "", false, fmt.Errorf("invalid resolved txid: %w", err)
+	}
+	return aliasTxID, true, nil
 }
 
 func isTransactionNotFoundRPCError(err error) bool {

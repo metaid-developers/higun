@@ -54,6 +54,9 @@ func NewServer(indexer *indexer.UTXOIndexer, metaStore *storage.MetaStore, stopC
 func (s *Server) SetMempoolManager(mempoolMgr *mempool.MempoolManager, bcClient *blockchain.Client) {
 	s.mempoolMgr = mempoolMgr
 	s.bcClient = bcClient
+	if s.bcClient != nil && s.indexer != nil {
+		s.bcClient.SetTxIDAliasResolver(s.indexer)
+	}
 }
 
 func (s *Server) setupRoutes() {

@@ -492,6 +492,18 @@ func (i *UTXOIndexer) indexIncome(block *Block, allBlock *Block, blockTimeStr st
 			end = txCount
 		}
 
+		if err = i.storeTxIDAliases(block.Transactions[start:end]); err != nil {
+			errMsg := syslogs.ErrLog{
+				Height:       block.Height,
+				BlockHash:    block.BlockHash,
+				ErrType:      "TxAliasStoreBulkSet",
+				Timestamp:    time.Now().Unix(),
+				ErrorMessage: err.Error(),
+			}
+			syslogs.InsertErrLog(errMsg)
+			return 0, 0, err
+		}
+
 		// Create temporary maps for current batch
 		//addressIncomeMap := make(map[string][]string)
 		//txMap := make(map[string][]string)
@@ -980,6 +992,7 @@ func (b *Block) Validate() error {
 
 type Transaction struct {
 	ID      string
+	NodeID  string
 	Inputs  []*Input
 	Outputs []*Output
 }

@@ -377,10 +377,19 @@ func (a *MVCAdapter) convertMVCTxToIndexerTx(tx *bsvwire.MsgTx) *indexer.Transac
 		}
 	}
 
+	nodeTxID := tx.TxHash().String()
 	// MVC 使用 GetNewHash2() 工具函数获取交易ID
 	txid, _ := GetNewHash2(tx)
+	if txid == "" {
+		txid = nodeTxID
+	}
+	nodeAlias := ""
+	if txid != nodeTxID {
+		nodeAlias = nodeTxID
+	}
 	return &indexer.Transaction{
 		ID:      txid,
+		NodeID:  nodeAlias,
 		Inputs:  inputs,
 		Outputs: outputs,
 	}

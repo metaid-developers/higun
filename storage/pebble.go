@@ -142,6 +142,20 @@ func (m *MetaStore) Set(key, value []byte) error {
 	return m.db.Set(key, value, pebble.Sync)
 }
 
+func (m *MetaStore) BulkSet(entries map[string]string) error {
+	if m == nil || m.db == nil || len(entries) == 0 {
+		return nil
+	}
+	batch := m.db.NewBatch()
+	defer batch.Close()
+	for key, value := range entries {
+		if err := batch.Set([]byte(key), []byte(value), pebble.NoSync); err != nil {
+			return err
+		}
+	}
+	return batch.Commit(pebble.Sync)
+}
+
 func (m *MetaStore) Close() error {
 	// Sync before closing
 	if err := m.db.LogData(nil, pebble.Sync); err != nil {
