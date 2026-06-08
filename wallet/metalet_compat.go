@@ -63,3 +63,26 @@ func NewMetaletMVCDOGEBalanceResponse(balance WalletBalance) Envelope {
 		UTXOCount:   balance.UTXOCount(),
 	})
 }
+
+type metaletUTXOItem struct {
+	TxID         string `json:"txId"`
+	Vout         int    `json:"vout"`
+	Satoshi      uint64 `json:"satoshi"`
+	Confirmed    bool   `json:"confirmed"`
+	Inscriptions []any  `json:"inscriptions"`
+}
+
+func NewMetaletUTXOResponse(chain Chain, utxos []WalletUTXO) Envelope {
+	_ = chain
+	items := make([]metaletUTXOItem, 0, len(utxos))
+	for _, utxo := range utxos {
+		items = append(items, metaletUTXOItem{
+			TxID:         utxo.TxID,
+			Vout:         utxo.Vout,
+			Satoshi:      utxo.Satoshi,
+			Confirmed:    utxo.Confirmed,
+			Inscriptions: []any{},
+		})
+	}
+	return Success(items)
+}

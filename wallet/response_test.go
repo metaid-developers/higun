@@ -193,6 +193,13 @@ func TestMetaletBalanceCompatibilityGoldenFixtures(t *testing.T) {
 	}
 }
 
+func TestMetaletUTXOCompatibilityGoldenFixture(t *testing.T) {
+	resp := NewMetaletUTXOResponse(ChainBTC, []WalletUTXO{
+		{Chain: ChainBTC, Address: "addr", TxID: "tx", Vout: 1, Satoshi: 1000, Confirmed: false, Mempool: true, Height: int64Ptr(-1)},
+	})
+	assertJSONFixture(t, "testdata/metalet_utxos.json", resp)
+}
+
 func marshalResponse(t *testing.T, value any) string {
 	t.Helper()
 	body, err := json.Marshal(value)
@@ -215,4 +222,13 @@ func assertCompactJSONEqual(t *testing.T, wantRaw, gotRaw []byte) {
 	if !bytes.Equal(want.Bytes(), got.Bytes()) {
 		t.Fatalf("JSON mismatch\ngot:  %s\nwant: %s", got.String(), want.String())
 	}
+}
+
+func assertJSONFixture(t *testing.T, path string, got any) {
+	t.Helper()
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	assertCompactJSONEqual(t, want, []byte(marshalResponse(t, got)))
 }

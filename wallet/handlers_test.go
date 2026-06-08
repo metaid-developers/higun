@@ -1,0 +1,377 @@
+package wallet
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
+)
+
+type fakeWalletService struct {
+	balance WalletBalance
+	utxos   []WalletUTXO
+	err     error
+}
+
+func (s *fakeWalletService) GetBalance(ctx context.Context, chain Chain, address string) (WalletBalance, error) {
+	if s.err != nil {
+		return WalletBalance{}, s.err
+	}
+	balance := s.balance
+	balance.Chain = chain
+	balance.Address = address
+	return balance, nil
+}
+
+func (s *fakeWalletService) GetUTXOs(ctx context.Context, chain Chain, address string) ([]WalletUTXO, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	out := make([]WalletUTXO, 0, len(s.utxos))
+	for _, utxo := range s.utxos {
+		utxo.Chain = chain
+		utxo.Address = address
+		out = append(out, utxo)
+	}
+	return out, nil
+}
+
+func newHandlerTestRouter(service WalletService) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	RegisterRoutes(router, NewGateway(service))
+	return router
+}
+
+func TestBalanceHandlerStandard(t *testing.T) {
+	router := newHandlerTestRouter(&fakeWalletService{balance: WalletBalance{
+		ConfirmedSatoshi: 135758,
+		UnsafeSatoshi:    134862,
+	}})
+
+	w := performWalletRequest(router, "/wallet/v1/btc/address/addr-btc/balance")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		`"code":0`,
+		`"message":"success"`,
+		`"safeSatoshi":896`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("response missing %s: %s", want, body)
+		}
+	}
+}
+
+func TestBalanceHandlerMetalet(t *testing.T) {
+	router := newHandlerTestRouter(&fakeWalletService{balance: WalletBalance{
+		ConfirmedSatoshi: 135758,
+		UnsafeSatoshi:    134862,
+	}})
+
+	w := performWalletRequest(router, "/wallet/v1/btc/address/addr-btc/balance?format=metalet")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"safeBalance":0.00000896`) {
+		t.Fatalf("metalet response missing safeBalance: %s", w.Body.String())
+	}
+}
+
+func TestUTXOHandlerDefaultsToMempoolIncluded(t *testing.T) {
+	router := newHandlerTestRouter(&fakeWalletService{utxos: []WalletUTXO{
+		{TxID: "confirmed-small", Vout: 0, Satoshi: 100, Confirmed: true, Mempool: false, Height: int64Ptr(100)},
+		{TxID: "mempool-large", Vout: 1, Satoshi: 200, Confirmed: false, Mempool: true, Height: int64Ptr(-1)},
+	}})
+
+	w := performWalletRequest(router, "/wallet/v1/btc/address/addr-btc/utxos")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		`"confirmedOnly":false`,
+		`"sort":"desc"`,
+		`"total":2`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("response missing %s: %s", want, body)
+		}
+	}
+	if strings.Index(body, `"txid":"mempool-large"`) > strings.Index(body, `"txid":"confirmed-small"`) {
+		t.Fatalf("default desc sort should place larger mempool utxo first: %s", body)
+	}
+}
+
+func TestUTXOHandlerConfirmedOnly(t *testing.T) {
+	router := newHandlerTestRouter(&fakeWalletService{utxos: []WalletUTXO{
+		{TxID: "confirmed", Vout: 0, Satoshi: 100, Confirmed: true, Mempool: false},
+		{TxID: "mempool", Vout: 1, Satoshi: 200, Confirmed: false, Mempool: true, Height: int64Ptr(-1)},
+	}})
+
+	w := performWalletRequest(router, "/wallet/v1/btc/address/addr-btc/utxos?confirmedOnly=true")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		`"confirmedOnly":true`,
+		`"total":1`,
+		`"txid":"confirmed"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("response missing %s: %s", want, body)
+		}
+	}
+	if strings.Contains(body, `"txid":"mempool"`) {
+		t.Fatalf("confirmedOnly=true should filter mempool utxos: %s", body)
+	}
+}
+
+func TestHandlerRejectsInvalidChainAndFormat(t *testing.T) {
+	router := newHandlerTestRouter(&fakeWalletService{})
+
+	tests := []struct {
+		name       string
+		path       string
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "unsupported chain",
+			path:       "/wallet/v1/ltc/address/addr/balance",
+			wantStatus: http.StatusNotFound,
+			wantBody:   "unsupported chain",
+		},
+		{
+			name:       "invalid format",
+			path:       "/wallet/v1/btc/address/addr/balance?format=legacy",
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "format must be standard or metalet",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := performWalletRequest(router, tt.path)
+			if w.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d; body: %s", w.Code, tt.wantStatus, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), tt.wantBody) {
+				t.Fatalf("response missing %q: %s", tt.wantBody, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandlerMapsCoreUnavailableToBadGateway(t *testing.T) {
+	router := newHandlerTestRouter(&fakeWalletService{
+		err: NewHTTPWalletError(http.StatusBadGateway, CodeCoreUnavailable, "core unavailable"),
+	})
+
+	w := performWalletRequest(router, "/wallet/v1/btc/address/addr-btc/balance")
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "core unavailable") {
+		t.Fatalf("response missing service error: %s", w.Body.String())
+	}
+}
+
+func TestGatewayServiceDisabledChainReturnsServiceUnavailable(t *testing.T) {
+	service, err := NewGatewayService(Config{
+		Timeout: time.Second,
+		Chains: map[Chain]ChainConfig{
+			ChainBTC: {Enabled: false, CoreURL: "http://example.test"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewGatewayService: %v", err)
+	}
+
+	_, err = service.GetBalance(context.Background(), ChainBTC, "addr-btc")
+
+	var walletErr *WalletError
+	if !errors.As(err, &walletErr) {
+		t.Fatalf("error = %v, want WalletError", err)
+	}
+	if walletErr.HTTPStatus != http.StatusServiceUnavailable || walletErr.Code != CodeCoreUnavailable {
+		t.Fatalf("wallet error = %+v, want HTTP 503 code %d", walletErr, CodeCoreUnavailable)
+	}
+}
+
+func TestHandlerMapsPlainErrorToInternalError(t *testing.T) {
+	router := newHandlerTestRouter(&fakeWalletService{err: errors.New("plain failure")})
+
+	w := performWalletRequest(router, "/wallet/v1/btc/address/addr-btc/balance")
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "plain failure") {
+		t.Fatalf("response missing wrapped plain error: %s", w.Body.String())
+	}
+}
+
+func TestGatewayServiceUsesConfiguredCoreClient(t *testing.T) {
+	core := newCoreTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/balance" {
+			t.Fatalf("path = %s, want /balance", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("address"); got != "addr-btc" {
+			t.Fatalf("address = %s, want addr-btc", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"confirmed_balance_satoshi": uint64(135758),
+			"unsafe_fee_satoshi":        uint64(134862),
+		})
+	})
+	defer core.Close()
+	service := newGatewayServiceForCore(t, map[Chain]string{ChainBTC: core.URL})
+
+	got, err := service.GetBalance(context.Background(), ChainBTC, "addr-btc")
+
+	if err != nil {
+		t.Fatalf("GetBalance: %v", err)
+	}
+	if got.Chain != ChainBTC || got.Address != "addr-btc" || got.SafeSatoshi() != 896 {
+		t.Fatalf("unexpected balance: %+v", got)
+	}
+}
+
+func TestGatewayServiceRoutesEachChainToConfiguredCore(t *testing.T) {
+	btcCore := newBalanceCoreForChain(t, ChainBTC)
+	defer btcCore.Close()
+	mvcCore := newBalanceCoreForChain(t, ChainMVC)
+	defer mvcCore.Close()
+	dogeCore := newBalanceCoreForChain(t, ChainDOGE)
+	defer dogeCore.Close()
+	service := newGatewayServiceForCore(t, map[Chain]string{
+		ChainBTC:  btcCore.URL,
+		ChainMVC:  mvcCore.URL,
+		ChainDOGE: dogeCore.URL,
+	})
+
+	for _, chain := range []Chain{ChainBTC, ChainMVC, ChainDOGE} {
+		got, err := service.GetBalance(context.Background(), chain, "addr-"+string(chain))
+		if err != nil {
+			t.Fatalf("GetBalance(%s): %v", chain, err)
+		}
+		if got.Chain != chain || got.Address != "addr-"+string(chain) || got.ConfirmedSatoshi != chainBalanceAmount(chain) {
+			t.Fatalf("GetBalance(%s) routed to wrong core: %+v", chain, got)
+		}
+	}
+}
+
+func TestGatewayServiceRoutesEachChainUTXOsToConfiguredCore(t *testing.T) {
+	btcCore := newUTXOCoreForChain(t, ChainBTC)
+	defer btcCore.Close()
+	mvcCore := newUTXOCoreForChain(t, ChainMVC)
+	defer mvcCore.Close()
+	dogeCore := newUTXOCoreForChain(t, ChainDOGE)
+	defer dogeCore.Close()
+	service := newGatewayServiceForCore(t, map[Chain]string{
+		ChainBTC:  btcCore.URL,
+		ChainMVC:  mvcCore.URL,
+		ChainDOGE: dogeCore.URL,
+	})
+
+	for _, chain := range []Chain{ChainBTC, ChainMVC, ChainDOGE} {
+		got, err := service.GetUTXOs(context.Background(), chain, "addr-"+string(chain))
+		if err != nil {
+			t.Fatalf("GetUTXOs(%s): %v", chain, err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("GetUTXOs(%s) len = %d, want 1", chain, len(got))
+		}
+		if got[0].Chain != chain || got[0].Address != "addr-"+string(chain) || got[0].TxID != "tx-"+string(chain) {
+			t.Fatalf("GetUTXOs(%s) routed to wrong core: %+v", chain, got[0])
+		}
+	}
+}
+
+func performWalletRequest(router *gin.Engine, path string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	router.ServeHTTP(w, req)
+	return w
+}
+
+func newCoreTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(handler)
+}
+
+func newGatewayServiceForCore(t *testing.T, urls map[Chain]string) *GatewayService {
+	t.Helper()
+	chains := make(map[Chain]ChainConfig, len(urls))
+	for chain, url := range urls {
+		chains[chain] = ChainConfig{Enabled: true, CoreURL: url}
+	}
+	service, err := NewGatewayService(Config{Timeout: time.Second, Chains: chains})
+	if err != nil {
+		t.Fatalf("NewGatewayService: %v", err)
+	}
+	return service
+}
+
+func newBalanceCoreForChain(t *testing.T, chain Chain) *httptest.Server {
+	t.Helper()
+	return newCoreTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/balance" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.URL.Query().Get("address"); got != "addr-"+string(chain) {
+			t.Fatalf("%s core received address %s", chain, got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"confirmed_balance_satoshi": chainBalanceAmount(chain),
+		})
+	})
+}
+
+func newUTXOCoreForChain(t *testing.T, chain Chain) *httptest.Server {
+	t.Helper()
+	return newCoreTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/utxos" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.URL.Query().Get("address"); got != "addr-"+string(chain) {
+			t.Fatalf("%s core received address %s", chain, got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"address": "addr-" + string(chain),
+			"utxos": []map[string]any{
+				{"tx_id": "tx-" + string(chain), "index": "0", "amount": chainBalanceAmount(chain), "is_mempool": false},
+			},
+		})
+	})
+}
+
+func chainBalanceAmount(chain Chain) uint64 {
+	switch chain {
+	case ChainBTC:
+		return 101
+	case ChainMVC:
+		return 202
+	case ChainDOGE:
+		return 303
+	default:
+		return 0
+	}
+}
