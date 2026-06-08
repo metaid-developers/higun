@@ -120,7 +120,7 @@ func normalizeCoreHistory(chain Chain, address string, options HistoryOptions, p
 			Direction:     direction,
 			IncomeSatoshi: item.Income,
 			SpendSatoshi:  item.Spend,
-			NetSatoshi:    uint64DeltaToInt64(item.Income, item.Spend),
+			NetSatoshi:    NewSignedSatoshiDelta(item.Income, item.Spend),
 			Confirmed:     !item.IsMempool,
 			Mempool:       item.IsMempool,
 			Confirmations: confirmations,

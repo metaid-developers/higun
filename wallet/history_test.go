@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -72,7 +73,7 @@ func TestCoreClientFetchHistory(t *testing.T) {
 		t.Fatalf("len Items = %d, want 1", len(got.Items))
 	}
 	item := got.Items[0]
-	if item.TxID != txid || !item.Mempool || item.NetSatoshi != 1000 {
+	if item.TxID != txid || !item.Mempool || item.NetSatoshi.String() != "1000" {
 		t.Fatalf("unexpected history item: %+v", item)
 	}
 }
@@ -110,7 +111,7 @@ func TestStandardHistoryResponse(t *testing.T) {
 				Direction:     "income",
 				IncomeSatoshi: 1000,
 				SpendSatoshi:  0,
-				NetSatoshi:    1000,
+				NetSatoshi:    NewSignedSatoshiDelta(1000, 0),
 				Confirmed:     false,
 				Mempool:       true,
 				Confirmations: &confirmations,
@@ -158,7 +159,7 @@ func TestStandardHistoryResponseUsesSignedSpendNetString(t *testing.T) {
 				Direction:     "spend",
 				IncomeSatoshi: 0,
 				SpendSatoshi:  1000,
-				NetSatoshi:    -1000,
+				NetSatoshi:    NewSignedSatoshiDelta(0, 1000),
 				Confirmed:     true,
 			},
 		},
@@ -171,6 +172,54 @@ func TestStandardHistoryResponseUsesSignedSpendNetString(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("standard history response missing %s: %s", want, body)
+		}
+	}
+}
+
+func TestHistoryResponsePreservesLargePositiveNet(t *testing.T) {
+	txid := strings.Repeat("c", 64)
+	page, err := normalizeCoreHistory(ChainDOGE, "addr", HistoryOptions{Page: 1, Limit: 20, Sort: "desc"}, coreHistoryResponse{
+		Address: "addr",
+		Total:   1,
+		List: []coreHistoryItem{
+			{TxID: txid, Income: uint64(math.MaxInt64) + 1, Type: "income"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeCoreHistory: %v", err)
+	}
+
+	body := marshalResponse(t, NewStandardHistoryResponse(page))
+	for _, want := range []string{
+		`"netSatoshi":9223372036854775808`,
+		`"net":"92233720368.54775808"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("large positive history response missing %s: %s", want, body)
+		}
+	}
+}
+
+func TestHistoryResponsePreservesLargeNegativeNet(t *testing.T) {
+	txid := strings.Repeat("d", 64)
+	page, err := normalizeCoreHistory(ChainDOGE, "addr", HistoryOptions{Page: 1, Limit: 20, Sort: "desc"}, coreHistoryResponse{
+		Address: "addr",
+		Total:   1,
+		List: []coreHistoryItem{
+			{TxID: txid, Spend: uint64(math.MaxInt64) + 2, Type: "spend"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeCoreHistory: %v", err)
+	}
+
+	body := marshalResponse(t, NewStandardHistoryResponse(page))
+	for _, want := range []string{
+		`"netSatoshi":-9223372036854775809`,
+		`"net":"-92233720368.54775809"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("large negative history response missing %s: %s", want, body)
 		}
 	}
 }

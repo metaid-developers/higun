@@ -255,7 +255,7 @@ func (s *fakeWalletService) GetHistory(ctx context.Context, chain Chain, address
 				TxID:          strings.Repeat("a", 64),
 				Direction:     "income",
 				IncomeSatoshi: 1000,
-				NetSatoshi:    1000,
+				NetSatoshi:    NewSignedSatoshiDelta(1000, 0),
 				Confirmed:     false,
 				Mempool:       true,
 				Confirmations: &confirmations,

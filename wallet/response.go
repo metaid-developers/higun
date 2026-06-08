@@ -105,20 +105,20 @@ type StandardHistoryData struct {
 }
 
 type StandardHistoryItem struct {
-	TxID          string  `json:"txid"`
-	Direction     string  `json:"direction"`
-	IncomeSatoshi uint64  `json:"incomeSatoshi"`
-	SpendSatoshi  uint64  `json:"spendSatoshi"`
-	NetSatoshi    int64   `json:"netSatoshi"`
-	Income        string  `json:"income"`
-	Spend         string  `json:"spend"`
-	Net           string  `json:"net"`
-	Confirmed     bool    `json:"confirmed"`
-	Mempool       bool    `json:"mempool"`
-	Confirmations *uint64 `json:"confirmations"`
-	Height        *int64  `json:"height"`
-	Timestamp     int64   `json:"timestamp"`
-	Time          string  `json:"time"`
+	TxID          string              `json:"txid"`
+	Direction     string              `json:"direction"`
+	IncomeSatoshi uint64              `json:"incomeSatoshi"`
+	SpendSatoshi  uint64              `json:"spendSatoshi"`
+	NetSatoshi    SignedSatoshiAmount `json:"netSatoshi"`
+	Income        string              `json:"income"`
+	Spend         string              `json:"spend"`
+	Net           string              `json:"net"`
+	Confirmed     bool                `json:"confirmed"`
+	Mempool       bool                `json:"mempool"`
+	Confirmations *uint64             `json:"confirmations"`
+	Height        *int64              `json:"height"`
+	Timestamp     int64               `json:"timestamp"`
+	Time          string              `json:"time"`
 }
 
 func Success(data any) Envelope {
@@ -229,7 +229,7 @@ func NewStandardHistoryResponse(page WalletHistoryPage) Envelope {
 			NetSatoshi:    item.NetSatoshi,
 			Income:        SatoshiToDecimalString(item.IncomeSatoshi),
 			Spend:         SatoshiToDecimalString(item.SpendSatoshi),
-			Net:           SignedSatoshiToDecimalString(item.NetSatoshi),
+			Net:           item.NetSatoshi.DecimalString(),
 			Confirmed:     item.Confirmed,
 			Mempool:       item.Mempool,
 			Confirmations: item.Confirmations,

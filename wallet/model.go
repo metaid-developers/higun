@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -180,13 +181,44 @@ type WalletHistoryItem struct {
 	Direction     string
 	IncomeSatoshi uint64
 	SpendSatoshi  uint64
-	NetSatoshi    int64
+	NetSatoshi    SignedSatoshiAmount
 	Confirmed     bool
 	Mempool       bool
 	Confirmations *uint64
 	Height        *int64
 	Timestamp     int64
 	Time          string
+}
+
+type SignedSatoshiAmount struct {
+	Negative bool
+	Absolute uint64
+}
+
+func NewSignedSatoshiDelta(income, spend uint64) SignedSatoshiAmount {
+	if income >= spend {
+		return SignedSatoshiAmount{Absolute: income - spend}
+	}
+	return SignedSatoshiAmount{Negative: true, Absolute: spend - income}
+}
+
+func (a SignedSatoshiAmount) String() string {
+	if a.Negative && a.Absolute > 0 {
+		return "-" + strconv.FormatUint(a.Absolute, 10)
+	}
+	return strconv.FormatUint(a.Absolute, 10)
+}
+
+func (a SignedSatoshiAmount) DecimalString() string {
+	decimal := SatoshiToDecimalString(a.Absolute)
+	if a.Negative && a.Absolute > 0 {
+		return "-" + decimal
+	}
+	return decimal
+}
+
+func (a SignedSatoshiAmount) MarshalJSON() ([]byte, error) {
+	return []byte(a.String()), nil
 }
 
 type WalletHistoryPage struct {
