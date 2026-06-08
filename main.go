@@ -197,7 +197,7 @@ func main() {
 					Timestamp:    time.Now().Unix(),
 					ErrorMessage: err.Error(),
 				}
-				go syslogs.InsertErrLog(errMsg)
+				syslogs.InsertErrLog(errMsg)
 				log.Printf("Block synchronization failed: %v, retrying in 15 seconds...", err)
 				select {
 				case <-stopCh:
