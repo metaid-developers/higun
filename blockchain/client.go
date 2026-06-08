@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -49,6 +50,73 @@ func (c *Client) GetBlockByHeight(height int64) (*indexer.Block, error) {
 }
 
 var RpcClient *rpcclient.Client
+
+var ErrTransactionNotFound = errors.New("transaction not found")
+
+type TxDetail struct {
+	TxID          string     `json:"txid"`
+	Confirmed     bool       `json:"confirmed"`
+	Mempool       bool       `json:"mempool"`
+	Confirmations uint64     `json:"confirmations"`
+	Height        *int64     `json:"height,omitempty"`
+	BlockHash     string     `json:"blockHash,omitempty"`
+	BlockTime     *int64     `json:"blockTime,omitempty"`
+	Inputs        []TxInput  `json:"inputs"`
+	Outputs       []TxOutput `json:"outputs"`
+	Size          int32      `json:"size,omitempty"`
+	Vsize         int32      `json:"vsize,omitempty"`
+}
+
+type TxInput struct {
+	TxID     string `json:"txid,omitempty"`
+	Vout     uint32 `json:"vout,omitempty"`
+	Coinbase string `json:"coinbase,omitempty"`
+}
+
+type TxOutput struct {
+	Vout    uint32 `json:"vout"`
+	Address string `json:"address,omitempty"`
+	Satoshi uint64 `json:"satoshi"`
+}
+
+func txDetailFromVerbose(raw *btcjson.TxRawResult) (*TxDetail, error) {
+	if raw == nil || strings.TrimSpace(raw.Txid) == "" {
+		return nil, ErrTransactionNotFound
+	}
+	detail := &TxDetail{
+		TxID:          strings.ToLower(strings.TrimSpace(raw.Txid)),
+		Confirmed:     raw.Confirmations > 0,
+		Mempool:       raw.Confirmations == 0,
+		Confirmations: raw.Confirmations,
+		BlockHash:     raw.BlockHash,
+		Inputs:        make([]TxInput, 0, len(raw.Vin)),
+		Outputs:       make([]TxOutput, 0, len(raw.Vout)),
+		Size:          raw.Size,
+		Vsize:         raw.Vsize,
+	}
+	if raw.Blocktime > 0 {
+		detail.BlockTime = int64Ptr(raw.Blocktime)
+	}
+	for _, in := range raw.Vin {
+		detail.Inputs = append(detail.Inputs, TxInput{TxID: in.Txid, Vout: in.Vout, Coinbase: in.Coinbase})
+	}
+	for _, out := range raw.Vout {
+		satoshi, err := rpcAmountToSatoshis(json.Number(strconv.FormatFloat(out.Value, 'f', 8, 64)))
+		if err != nil {
+			return nil, fmt.Errorf("parse tx output value: %w", err)
+		}
+		address := out.ScriptPubKey.Address
+		if address == "" && len(out.ScriptPubKey.Addresses) > 0 {
+			address = out.ScriptPubKey.Addresses[0]
+		}
+		detail.Outputs = append(detail.Outputs, TxOutput{Vout: out.N, Address: address, Satoshi: satoshi})
+	}
+	return detail, nil
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
+}
 
 // NewClientWithAdapter creates client using adapter architecture
 func NewClientWithAdapter(cfg *config.Config) (*Client, error) {
@@ -147,6 +215,31 @@ func (c *Client) GetRawTransaction(txHashStr string) (*btcutil.Tx, error) {
 		return nil, fmt.Errorf("failed to get transaction %s: %w", txHash, err)
 	}
 	return tx, nil
+}
+
+func (c *Client) GetTransactionDetail(txid string) (*TxDetail, error) {
+	txHash, err := chainhash.NewHashFromStr(strings.TrimSpace(txid))
+	if err != nil {
+		return nil, fmt.Errorf("invalid txid: %w", err)
+	}
+	if c == nil || c.rpcClient == nil {
+		return nil, fmt.Errorf("rpc client not initialized")
+	}
+	raw, err := c.rpcClient.GetRawTransactionVerbose(txHash)
+	if err != nil {
+		if isTransactionNotFoundRPCError(err) {
+			return nil, fmt.Errorf("%w: %v", ErrTransactionNotFound, err)
+		}
+		return nil, err
+	}
+	return txDetailFromVerbose(raw)
+}
+
+func isTransactionNotFoundRPCError(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no information available") ||
+		strings.Contains(message, "no such mempool or blockchain transaction") ||
+		strings.Contains(message, "not found")
 }
 
 func (c *Client) IsUnspent(txID string, index uint32) (bool, error) {

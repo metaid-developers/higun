@@ -31,6 +31,7 @@ type Server struct {
 	startMempoolFn        func() error
 	initializeMempoolFn   func()
 	startMempoolCleanerFn func()
+	getTxDetailFn         func(string) (*blockchain.TxDetail, error)
 	walletGatewayEnabled  bool
 }
 
@@ -75,6 +76,7 @@ func (s *Server) setupRoutes() {
 	s.Router.GET("/blocks/reindex", s.reindexBlocks)
 	// Rich list: addresses sorted by balance descending
 	s.Router.GET("/rich-list", s.getRichList)
+	s.Router.GET("/tx/:txid", s.getTxDetail)
 }
 
 func (s *Server) EnableWalletGateway(cfg wallet.Config) error {
@@ -115,6 +117,40 @@ func (s *Server) broadcastTx(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 2000, "msg": txid})
+}
+
+func (s *Server) getTxDetail(c *gin.Context) {
+	txid := strings.ToLower(strings.TrimSpace(c.Param("txid")))
+	if len(txid) != 64 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid txid"})
+		return
+	}
+	for _, ch := range txid {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid txid"})
+			return
+		}
+	}
+
+	fetch := s.getTxDetailFn
+	if fetch == nil {
+		if s.bcClient == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "blockchain client not configured"})
+			return
+		}
+		fetch = s.bcClient.GetTransactionDetail
+	}
+
+	detail, err := fetch(txid)
+	if err != nil {
+		if errors.Is(err, blockchain.ErrTransactionNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "transaction not found"})
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": "transaction detail unavailable"})
+		return
+	}
+	c.JSON(http.StatusOK, detail)
 }
 
 func (s *Server) StartMempoolCore() error {
