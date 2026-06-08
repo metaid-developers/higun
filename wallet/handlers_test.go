@@ -16,6 +16,7 @@ import (
 type fakeWalletService struct {
 	balance      WalletBalance
 	utxos        []WalletUTXO
+	feeRate      FeeRate
 	err          error
 	balanceCalls int
 	utxoCalls    int
@@ -50,7 +51,48 @@ func (s *fakeWalletService) GetFeeRate(ctx context.Context, chain Chain) (FeeRat
 	if s.err != nil {
 		return FeeRate{}, s.err
 	}
-	return FeeRate{Source: FeeRateSourceConfig, Unit: FeeRateUnitSatPerByte, Slow: 1, Normal: 3, Fast: 5, Default: "normal"}, nil
+	if s.feeRate.Source == "" {
+		return FeeRate{Source: FeeRateSourceConfig, Unit: FeeRateUnitSatPerByte, Slow: 1, Normal: 3, Fast: 5, Default: "normal"}, nil
+	}
+	return s.feeRate, nil
+}
+
+func TestFeeRateHandler(t *testing.T) {
+	router := newHandlerTestRouter(&fakeWalletService{feeRate: FeeRate{
+		Source:  FeeRateSourceConfig,
+		Unit:    FeeRateUnitSatPerByte,
+		Slow:    2,
+		Normal:  4,
+		Fast:    8,
+		Default: "fast",
+	}})
+
+	w := performWalletRequest(router, "/wallet/v1/btc/fee-rate")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{`"chain":"btc"`, `"slow":2`, `"normal":4`, `"fast":8`, `"default":"fast"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("response missing %s: %s", want, body)
+		}
+	}
+}
+
+func TestFeeRateHandlerSupportsAllV11Chains(t *testing.T) {
+	router := newHandlerTestRouter(&fakeWalletService{})
+	for _, chain := range []string{"btc", "mvc", "doge"} {
+		t.Run(chain, func(t *testing.T) {
+			w := performWalletRequest(router, "/wallet/v1/"+chain+"/fee-rate")
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), `"chain":"`+chain+`"`) {
+				t.Fatalf("response missing chain %s: %s", chain, w.Body.String())
+			}
+		})
+	}
 }
 
 func (s *fakeWalletService) BroadcastTransaction(ctx context.Context, chain Chain, rawTx string) (BroadcastResult, error) {

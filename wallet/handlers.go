@@ -83,10 +83,34 @@ func (g *Gateway) getUTXOs(c *gin.Context) {
 	c.JSON(http.StatusOK, NewStandardUTXOResponse(chain, address, confirmedOnly, sortOrder, normalized))
 }
 
-func (g *Gateway) parseCommon(c *gin.Context) (Chain, ResponseFormat, bool) {
+func (g *Gateway) getFeeRate(c *gin.Context) {
+	if !g.ensureService(c) {
+		return
+	}
+	chain, ok := g.parseChain(c)
+	if !ok {
+		return
+	}
+	feeRate, err := g.service.GetFeeRate(c.Request.Context(), chain)
+	if err != nil {
+		g.writeServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, NewStandardFeeRateResponse(chain, feeRate))
+}
+
+func (g *Gateway) parseChain(c *gin.Context) (Chain, bool) {
 	chain, ok := NormalizeChain(c.Param("chain"))
 	if !ok {
 		g.writeWalletError(c, NewHTTPWalletError(http.StatusNotFound, CodeUnsupportedChain, "unsupported chain"))
+		return "", false
+	}
+	return chain, true
+}
+
+func (g *Gateway) parseCommon(c *gin.Context) (Chain, ResponseFormat, bool) {
+	chain, ok := g.parseChain(c)
+	if !ok {
 		return "", "", false
 	}
 	format, ok := NormalizeFormat(c.Query("format"))
@@ -150,6 +174,8 @@ func publicServiceError(err *WalletError) *WalletError {
 		message = "core unavailable"
 	case CodeInvalidUpstream:
 		message = "invalid upstream response"
+	case CodeFeeRateUnavailable:
+		message = "fee rate unavailable"
 	case CodeInternal:
 		message = "internal wallet error"
 	}

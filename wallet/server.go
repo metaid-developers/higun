@@ -150,6 +150,7 @@ func (s *GatewayService) GetHistory(ctx context.Context, chain Chain, address st
 }
 
 func RegisterRoutes(router gin.IRouter, gateway *Gateway) {
+	router.GET("/wallet/v1/:chain/fee-rate", gateway.getFeeRate)
 	router.GET("/wallet/v1/:chain/address/:address/balance", gateway.getBalance)
 	router.GET("/wallet/v1/:chain/address/:address/utxos", gateway.getUTXOs)
 }

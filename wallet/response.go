@@ -44,6 +44,16 @@ type StandardUTXOItem struct {
 	Height    *int64 `json:"height,omitempty"`
 }
 
+type StandardFeeRateData struct {
+	Chain   Chain  `json:"chain"`
+	Source  string `json:"source"`
+	Unit    string `json:"unit"`
+	Slow    int64  `json:"slow"`
+	Normal  int64  `json:"normal"`
+	Fast    int64  `json:"fast"`
+	Default string `json:"default"`
+}
+
 func Success(data any) Envelope {
 	return Envelope{Code: CodeSuccess, Message: "success", Data: data}
 }
@@ -74,6 +84,18 @@ func NewStandardBalanceResponse(balance WalletBalance) Envelope {
 		MempoolSpend:         SatoshiToDecimalString(balance.MempoolSpendSatoshi),
 		Unsafe:               SatoshiToDecimalString(balance.UnsafeSatoshi),
 		Safe:                 SatoshiToDecimalString(safeSatoshi),
+	})
+}
+
+func NewStandardFeeRateResponse(chain Chain, feeRate FeeRate) Envelope {
+	return Success(StandardFeeRateData{
+		Chain:   chain,
+		Source:  feeRate.Source,
+		Unit:    feeRate.Unit,
+		Slow:    feeRate.Slow,
+		Normal:  feeRate.Normal,
+		Fast:    feeRate.Fast,
+		Default: feeRate.Default,
 	})
 }
 
