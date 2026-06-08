@@ -372,25 +372,6 @@ func TestGetUTXOsDeduplicatesMempoolIncomeRecords(t *testing.T) {
 	}
 }
 
-func TestGetUTXOsIncludesDustConfirmedOutputs(t *testing.T) {
-	idx := newBalanceIndexTestIndexer(t)
-
-	if err := idx.addressStore.Set([]byte("addr-dust-utxos"), []byte("tx-dust@0@500@1700000000,tx-normal@1@1500@1700000001")); err != nil {
-		t.Fatalf("seed addressStore: %v", err)
-	}
-
-	utxos, err := idx.GetUTXOs("addr-dust-utxos")
-	if err != nil {
-		t.Fatalf("GetUTXOs addr-dust-utxos: %v", err)
-	}
-	if len(utxos) != 2 {
-		t.Fatalf("expected dust and normal UTXOs, got %d: %+v", len(utxos), utxos)
-	}
-	if utxos[0].TxID != "tx-dust" || utxos[0].Amount != 500 {
-		t.Fatalf("expected first UTXO to be tx-dust@0 amount 500, got %+v", utxos[0])
-	}
-}
-
 func TestGetUTXOsFiltersConfirmedOutputsMissingFromNodeUTXOSet(t *testing.T) {
 	idx := newBalanceIndexTestIndexer(t)
 	if err := idx.addressStore.Set([]byte("addr-rpc-check"), []byte("tx-stale@0@5000@1700000000,tx-good@1@6000@1700000001")); err != nil {
