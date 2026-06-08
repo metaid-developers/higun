@@ -34,6 +34,25 @@ func TestStandardBalanceResponseUsesIntegerAndStringAmounts(t *testing.T) {
 	}
 }
 
+func TestStandardResponsesDoNotContainFloatAmountKeys(t *testing.T) {
+	resp := NewStandardBalanceResponse(WalletBalance{
+		Chain:            ChainBTC,
+		Address:          "addr",
+		ConfirmedSatoshi: 100000000,
+		UnsafeSatoshi:    1,
+	})
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	body := string(raw)
+	for _, forbidden := range []string{`"balance":`, `"safeBalance":`, `"unSafeBalance":`, `"confirmed_balance":`, `"unsafe_fee":`} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("standard response contains forbidden legacy/float key %s: %s", forbidden, body)
+		}
+	}
+}
+
 func TestStandardUTXOResponse(t *testing.T) {
 	body := marshalResponse(t, NewStandardUTXOResponse(ChainBTC, "addr", false, "desc", []WalletUTXO{
 		{Chain: ChainBTC, Address: "addr", TxID: "tx", Vout: 1, Satoshi: 1000, Confirmed: false, Mempool: true, Height: int64Ptr(-1)},

@@ -92,6 +92,21 @@ func TestBalanceHandlerMetalet(t *testing.T) {
 	}
 }
 
+func TestBalanceHandlerSupportsAllFirstVersionChains(t *testing.T) {
+	router := newHandlerTestRouter(&fakeWalletService{balance: WalletBalance{ConfirmedSatoshi: 1}})
+	for _, chain := range []string{"btc", "mvc", "doge"} {
+		req := httptest.NewRequest(http.MethodGet, "/wallet/v1/"+chain+"/address/addr/balance", nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, body = %s", chain, rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"chain":"`+chain+`"`) {
+			t.Fatalf("%s response missing chain: %s", chain, rec.Body.String())
+		}
+	}
+}
+
 func TestUTXOHandlerDefaultsToMempoolIncluded(t *testing.T) {
 	router := newHandlerTestRouter(&fakeWalletService{utxos: []WalletUTXO{
 		{TxID: "confirmed-small", Vout: 0, Satoshi: 100, Confirmed: true, Mempool: false, Height: int64Ptr(100)},
@@ -141,6 +156,41 @@ func TestUTXOHandlerConfirmedOnly(t *testing.T) {
 	}
 	if strings.Contains(body, `"txid":"mempool"`) {
 		t.Fatalf("confirmedOnly=true should filter mempool utxos: %s", body)
+	}
+}
+
+func TestUTXOHandlerSupportsAllFirstVersionChains(t *testing.T) {
+	router := newHandlerTestRouter(&fakeWalletService{utxos: []WalletUTXO{
+		{TxID: "tx", Vout: 0, Satoshi: 1, Confirmed: true, Height: int64Ptr(10)},
+	}})
+	for _, chain := range []string{"btc", "mvc", "doge"} {
+		req := httptest.NewRequest(http.MethodGet, "/wallet/v1/"+chain+"/address/addr/utxos", nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, body = %s", chain, rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"chain":"`+chain+`"`) {
+			t.Fatalf("%s response missing chain: %s", chain, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"total":1`) {
+			t.Fatalf("%s response missing UTXO item: %s", chain, rec.Body.String())
+		}
+	}
+}
+
+func TestUTXOHandlerRejectsInvalidConfirmedOnlyBeforeService(t *testing.T) {
+	service := &fakeWalletService{}
+	router := newHandlerTestRouter(service)
+
+	req := httptest.NewRequest(http.MethodGet, "/wallet/v1/btc/address/addr/utxos?confirmedOnly=maybe", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "confirmedOnly must be true or false") {
+		t.Fatalf("invalid confirmedOnly status/body = %d %s", rec.Code, rec.Body.String())
+	}
+	if service.utxoCalls != 0 {
+		t.Fatalf("service calls = %d, want 0", service.utxoCalls)
 	}
 }
 
