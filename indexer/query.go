@@ -319,9 +319,6 @@ func (i *UTXOIndexer) GetUTXOs(address string) (result []UTXO, err error) {
 			if _, exists := spendMap[key]; exists {
 				continue
 			}
-			if in <= 1000 {
-				continue
-			}
 			utxos = append(utxos, UTXO{
 				TxID:      incomes[0],
 				Index:     incomes[1],
