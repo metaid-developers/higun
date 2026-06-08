@@ -78,11 +78,12 @@ type StandardTxDetailData struct {
 }
 
 type StandardTxInputItem struct {
-	TxID    string  `json:"txid"`
-	Vout    uint32  `json:"vout"`
-	Address string  `json:"address"`
-	Satoshi *uint64 `json:"satoshi,omitempty"`
-	Amount  string  `json:"amount,omitempty"`
+	TxID     string  `json:"txid"`
+	Vout     uint32  `json:"vout"`
+	Address  string  `json:"address"`
+	Satoshi  *uint64 `json:"satoshi,omitempty"`
+	Amount   string  `json:"amount,omitempty"`
+	Coinbase string  `json:"coinbase,omitempty"`
 }
 
 type StandardTxOutputItem struct {
@@ -145,10 +146,11 @@ func NewStandardTxDetailResponse(detail WalletTxDetail) Envelope {
 	inputs := make([]StandardTxInputItem, 0, len(detail.Inputs))
 	for _, in := range detail.Inputs {
 		item := StandardTxInputItem{
-			TxID:    in.TxID,
-			Vout:    in.Vout,
-			Address: in.Address,
-			Satoshi: in.Satoshi,
+			TxID:     in.TxID,
+			Vout:     in.Vout,
+			Address:  in.Address,
+			Satoshi:  in.Satoshi,
+			Coinbase: in.Coinbase,
 		}
 		if in.Satoshi != nil {
 			item.Amount = SatoshiToDecimalString(*in.Satoshi)

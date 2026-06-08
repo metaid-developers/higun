@@ -139,10 +139,11 @@ type BroadcastResult struct {
 }
 
 type WalletTxInput struct {
-	TxID    string
-	Vout    uint32
-	Address string
-	Satoshi *uint64
+	TxID     string
+	Vout     uint32
+	Address  string
+	Satoshi  *uint64
+	Coinbase string
 }
 
 type WalletTxOutput struct {

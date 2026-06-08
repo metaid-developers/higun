@@ -61,10 +61,11 @@ type coreTxDetailResponse struct {
 }
 
 type coreTxInput struct {
-	TxID    string  `json:"txid"`
-	Vout    uint32  `json:"vout"`
-	Address string  `json:"address"`
-	Satoshi *uint64 `json:"satoshi"`
+	TxID     string  `json:"txid"`
+	Vout     uint32  `json:"vout"`
+	Address  string  `json:"address"`
+	Satoshi  *uint64 `json:"satoshi"`
+	Coinbase string  `json:"coinbase"`
 }
 
 type coreTxOutput struct {
@@ -195,14 +196,15 @@ func (c *CoreClient) FetchTransaction(ctx context.Context, chain Chain, txid str
 	}
 
 	var payload coreTxDetailResponse
-	if err := c.getJSON(req, &payload); err != nil {
+	if err := c.doJSON(req, &payload, logWalletUpstreamOptions{TxNotFoundOn404: true}); err != nil {
 		return WalletTxDetail{}, err
 	}
 	return normalizeCoreTxDetail(chain, payload)
 }
 
 type logWalletUpstreamOptions struct {
-	RedactBody bool
+	RedactBody      bool
+	TxNotFoundOn404 bool
 }
 
 func (c *CoreClient) getJSON(req *http.Request, out any) error {
@@ -221,7 +223,7 @@ func (c *CoreClient) doJSON(req *http.Request, out any, options logWalletUpstrea
 
 	status = resp.StatusCode
 	if resp.StatusCode < http.StatusOK || resp.StatusCode > 299 {
-		if resp.StatusCode == http.StatusNotFound && strings.Contains(req.URL.Path, "/tx/") {
+		if resp.StatusCode == http.StatusNotFound && options.TxNotFoundOn404 {
 			errMessage := "transaction not found"
 			logWalletUpstream(req, status, start, errMessage)
 			return NewHTTPWalletError(http.StatusNotFound, CodeTxNotFound, errMessage)

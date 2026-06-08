@@ -57,6 +57,23 @@ func TestCoreClientBroadcastTransactionMapsRejectedResponse(t *testing.T) {
 	assertWalletError(t, err, http.StatusBadGateway, CodeBroadcastRejected)
 }
 
+func TestCoreClientBroadcastTransactionDoesNotMapTxPath404ToTxNotFound(t *testing.T) {
+	core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/btc/tx/broadcast" {
+			t.Fatalf("path = %s, want /btc/tx/broadcast", r.URL.Path)
+		}
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer core.Close()
+
+	client, err := NewCoreClient(core.URL, 2*time.Second)
+	if err != nil {
+		t.Fatalf("NewCoreClient: %v", err)
+	}
+	_, err = client.BroadcastTransaction(context.Background(), ChainBTC, "deadbeef", "/btc/tx/broadcast")
+	assertWalletError(t, err, http.StatusBadGateway, CodeCoreUnavailable)
+}
+
 func TestBroadcastLogDoesNotLeakRawTx(t *testing.T) {
 	rawTx := "0200000001abcdef"
 	core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

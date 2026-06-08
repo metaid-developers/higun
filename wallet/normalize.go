@@ -77,10 +77,16 @@ func normalizeCoreTxDetail(chain Chain, payload coreTxDetailResponse) (WalletTxD
 	if !ok {
 		return WalletTxDetail{}, NewHTTPWalletError(http.StatusBadGateway, CodeInvalidUpstream, "invalid upstream response")
 	}
-	if payload.Confirmed && payload.Confirmations == 0 {
-		return WalletTxDetail{}, NewHTTPWalletError(http.StatusBadGateway, CodeInvalidUpstream, "invalid upstream response")
-	}
-	if payload.Mempool && payload.Confirmations != 0 {
+	switch {
+	case payload.Confirmed:
+		if payload.Mempool || payload.Confirmations == 0 {
+			return WalletTxDetail{}, NewHTTPWalletError(http.StatusBadGateway, CodeInvalidUpstream, "invalid upstream response")
+		}
+	case payload.Mempool:
+		if payload.Confirmations != 0 {
+			return WalletTxDetail{}, NewHTTPWalletError(http.StatusBadGateway, CodeInvalidUpstream, "invalid upstream response")
+		}
+	default:
 		return WalletTxDetail{}, NewHTTPWalletError(http.StatusBadGateway, CodeInvalidUpstream, "invalid upstream response")
 	}
 
@@ -101,10 +107,11 @@ func normalizeCoreTxDetail(chain Chain, payload coreTxDetailResponse) (WalletTxD
 	}
 	for _, in := range payload.Inputs {
 		detail.Inputs = append(detail.Inputs, WalletTxInput{
-			TxID:    in.TxID,
-			Vout:    in.Vout,
-			Address: in.Address,
-			Satoshi: in.Satoshi,
+			TxID:     in.TxID,
+			Vout:     in.Vout,
+			Address:  in.Address,
+			Satoshi:  in.Satoshi,
+			Coinbase: in.Coinbase,
 		})
 	}
 	for _, out := range payload.Outputs {
