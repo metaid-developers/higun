@@ -238,8 +238,7 @@ func (c *Client) GetTransactionDetail(txid string) (*TxDetail, error) {
 func isTransactionNotFoundRPCError(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "no information available") ||
-		strings.Contains(message, "no such mempool or blockchain transaction") ||
-		strings.Contains(message, "not found")
+		strings.Contains(message, "no such mempool or blockchain transaction")
 }
 
 func (c *Client) IsUnspent(txID string, index uint32) (bool, error) {

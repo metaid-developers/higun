@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -66,6 +67,17 @@ func TestTxDetailJSONUsesWalletFieldNames(t *testing.T) {
 	for _, want := range []string{`"txid":"`, `"confirmed":true`, `"mempool":false`, `"confirmations":1`} {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("body missing %s: %s", want, string(body))
+		}
+	}
+}
+
+func TestTxDetailRPCErrorDoesNotMatchGenericMethodNotFound(t *testing.T) {
+	for _, err := range []error{
+		errors.New("Method not found"),
+		errors.New("rpc: method not found"),
+	} {
+		if isTransactionNotFoundRPCError(err) {
+			t.Fatalf("isTransactionNotFoundRPCError(%q) = true, want false", err.Error())
 		}
 	}
 }
