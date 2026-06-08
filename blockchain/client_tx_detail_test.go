@@ -71,6 +71,42 @@ func TestTxDetailJSONUsesWalletFieldNames(t *testing.T) {
 	}
 }
 
+func TestTxDetailJSONIncludesInputVoutZero(t *testing.T) {
+	detail := &TxDetail{
+		TxID:   strings.Repeat("a", 64),
+		Inputs: []TxInput{{TxID: strings.Repeat("b", 64), Vout: 0}},
+	}
+	body, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(body), `"vout":0`) {
+		t.Fatalf("body missing input vout zero: %s", string(body))
+	}
+}
+
+func TestTxDetailFromRawJSONPreservesLargeOutputSatoshis(t *testing.T) {
+	body := []byte(`{
+		"txid":"` + strings.Repeat("a", 64) + `",
+		"size":225,
+		"vsize":225,
+		"confirmations":1,
+		"vin":[{"txid":"` + strings.Repeat("b", 64) + `","vout":0}],
+		"vout":[{"n":0,"value":92233720368.54775907,"scriptPubKey":{"address":"addr-out"}}]
+	}`)
+
+	got, err := txDetailFromRawJSON(body)
+	if err != nil {
+		t.Fatalf("txDetailFromRawJSON: %v", err)
+	}
+	if len(got.Outputs) != 1 {
+		t.Fatalf("outputs len = %d, want 1", len(got.Outputs))
+	}
+	if got.Outputs[0].Satoshi != 9223372036854775907 {
+		t.Fatalf("satoshi = %d, want 9223372036854775907", got.Outputs[0].Satoshi)
+	}
+}
+
 func TestTxDetailRPCErrorDoesNotMatchGenericMethodNotFound(t *testing.T) {
 	for _, err := range []error{
 		errors.New("Method not found"),
