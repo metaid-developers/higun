@@ -166,8 +166,13 @@ func TestEnableWalletGatewayKeepsCoreRoutesRegistered(t *testing.T) {
 		"GET /balance",
 		"GET /utxos",
 		"GET /mempool/utxos",
+		"GET /tx/:txid",
 		"GET /wallet/v1/:chain/address/:address/balance",
 		"GET /wallet/v1/:chain/address/:address/utxos",
+		"POST /wallet/v1/:chain/tx/broadcast",
+		"GET /wallet/v1/:chain/tx/:txid",
+		"GET /wallet/v1/:chain/address/:address/history",
+		"GET /wallet/v1/:chain/fee-rate",
 	} {
 		if !routes[expected] {
 			t.Fatalf("missing route %s; got %#v", expected, routes)
@@ -178,7 +183,11 @@ func TestEnableWalletGatewayKeepsCoreRoutesRegistered(t *testing.T) {
 func hasWalletRoutes(server *Server) bool {
 	routes := routeSet(server)
 	return routes["GET /wallet/v1/:chain/address/:address/balance"] ||
-		routes["GET /wallet/v1/:chain/address/:address/utxos"]
+		routes["GET /wallet/v1/:chain/address/:address/utxos"] ||
+		routes["POST /wallet/v1/:chain/tx/broadcast"] ||
+		routes["GET /wallet/v1/:chain/tx/:txid"] ||
+		routes["GET /wallet/v1/:chain/address/:address/history"] ||
+		routes["GET /wallet/v1/:chain/fee-rate"]
 }
 
 func routeSet(server *Server) map[string]bool {

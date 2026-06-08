@@ -179,3 +179,120 @@ Expected log properties:
 - logs a truncated address such as `12ghVW...nMUikZ`;
 - does not log a full wallet address;
 - failed upstream calls include an `error` field.
+
+## Wallet Gateway v1.1 Smoke Checks
+
+Set these variables before running checks:
+
+```bash
+BASE_URL="http://127.0.0.1:3001"
+CHAIN="btc"
+ADDRESS="replace-with-funded-address"
+TXID="replace-with-known-transaction-id"
+```
+
+Fee-rate check:
+
+```bash
+curl -sS "$BASE_URL/wallet/v1/$CHAIN/fee-rate" | jq -e '
+  .code == 0 and
+  .data.source == "config" and
+  .data.unit == "sat_per_byte" and
+  (.data.slow > 0) and
+  (.data.normal > 0) and
+  (.data.fast > 0)
+'
+```
+
+Expected:
+
+- `code` is `0`;
+- `data.source` is `config`;
+- `data.unit` is `sat_per_byte`;
+- `data.slow`, `data.normal`, and `data.fast` are positive integers.
+
+History checks:
+
+```bash
+curl -sS "$BASE_URL/wallet/v1/$CHAIN/address/$ADDRESS/history?page=1&limit=20" | jq -e '
+  .code == 0 and
+  .data.page == 1 and
+  .data.limit == 20 and
+  (.data.items | type == "array") and
+  all(.data.items[]?; has("mempool") and has("timestamp") and has("net") and has("netSatoshi"))
+'
+
+curl -sS "$BASE_URL/wallet/v1/$CHAIN/address/$ADDRESS/history?page=1&limit=20&confirmedOnly=true" | jq -e '
+  .code == 0 and
+  .data.confirmedOnly == true and
+  all(.data.items[]?; .mempool != true)
+'
+
+curl -sS "$BASE_URL/wallet/v1/$CHAIN/address/$ADDRESS/history?page=1&limit=20" | jq -r '
+  .data.items[]? | [.txid, .incomeSatoshi, .spendSatoshi, .netSatoshi, .net, .timestamp, .mempool] | @tsv
+'
+```
+
+Expected:
+
+- default history may include mempool items;
+- `confirmedOnly=true` excludes items where `mempool` is `true`;
+- `timestamp` is numeric when the core has timestamp data;
+- `netSatoshi` and `net` represent the exact signed delta from `incomeSatoshi - spendSatoshi`.
+
+Transaction detail check:
+
+```bash
+curl -sS "$BASE_URL/wallet/v1/$CHAIN/tx/$TXID" | jq -e --arg txid "$TXID" '
+  .code == 0 and
+  .data.txid == $txid and
+  (.data | has("confirmed") and has("mempool") and has("confirmations")) and
+  (if .data.confirmed then .data.confirmations >= 1 elif .data.mempool then .data.confirmations == 0 else true end)
+'
+```
+
+Expected:
+
+- `code` is `0`;
+- `data.txid` equals `$TXID`;
+- `data.confirmed`, `data.mempool`, and `data.confirmations` are present;
+- confirmed transactions have `confirmations >= 1`;
+- mempool transactions have `confirmations = 0`.
+
+Broadcast accepted check:
+
+```bash
+SIGNED_RAW_TX="replace-with-signed-raw-transaction-hex"
+
+curl -sS -X POST "$BASE_URL/wallet/v1/$CHAIN/tx/broadcast" \
+  -H 'Content-Type: application/json' \
+  -d "{\"rawTx\":\"$SIGNED_RAW_TX\"}" | jq -e '
+    .code == 0 and
+    .data.accepted == true and
+    (.data.txid | type == "string" and length > 0)
+  '
+```
+
+Expected on accepted transaction:
+
+- `code` is `0`;
+- `data.accepted` is `true`;
+- `data.txid` is present.
+
+Broadcast rejected check:
+
+```bash
+REJECTED_RAW_TX="replace-with-valid-hex-that-core-will-reject"
+
+curl -sS -X POST "$BASE_URL/wallet/v1/$CHAIN/tx/broadcast" \
+  -H 'Content-Type: application/json' \
+  -d "{\"rawTx\":\"$REJECTED_RAW_TX\"}" | jq -e '
+    .code == -5004 and
+    .message == "broadcast rejected"
+  '
+```
+
+Expected on rejected transaction:
+
+- `code` is `-5004`;
+- `message` is `broadcast rejected`.
