@@ -564,7 +564,9 @@ func (s *Server) getHistoryUTXOs(c *gin.Context) {
 	}
 	page := c.DefaultQuery("page", "1")
 	limit := c.DefaultQuery("limit", "10")
-	utxos, total, err := s.indexer.GetHistoryUTXOs(address, page, limit)
+	confirmedOnly := c.DefaultQuery("confirmedOnly", "false")
+	sortOrder := c.DefaultQuery("sort", "desc")
+	utxos, total, err := s.indexer.GetHistoryUTXOsWithOptions(address, page, limit, confirmedOnly, sortOrder)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

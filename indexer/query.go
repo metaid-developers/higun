@@ -506,29 +506,17 @@ func (i *UTXOIndexer) GetAddressBalance(address string, dustThreshold int64) (*B
 
 // GetHistoryUTXOs
 func (i *UTXOIndexer) GetHistoryUTXOs(address string, pageStr string, limitStr string) ([]HistoryTx, int64, error) {
-	// Directly use GetUTXOs method
-	utxos, err := i.GetHistoryTxList(address)
+	return i.GetHistoryUTXOsWithOptions(address, pageStr, limitStr, "", "desc")
+}
+
+func (i *UTXOIndexer) GetHistoryUTXOsWithOptions(address string, pageStr string, limitStr string, confirmedOnlyStr string, sortStr string) ([]HistoryTx, int64, error) {
+	txs, err := i.GetHistoryTxList(address)
 	if err != nil {
 		return nil, 0, err
 	}
-	// Pagination
-	page, err := strconv.Atoi(pageStr)
-	if err != nil || page < 1 {
-		page = 1
-	}
-	limit, err := strconv.Atoi(limitStr)
-	if err != nil || limit < 1 {
-		limit = 10
-	}
-	start := (page - 1) * limit
-	end := start + limit
-	if start >= len(utxos) {
-		return []HistoryTx{}, 0, nil
-	}
-	if end > len(utxos) {
-		end = len(utxos)
-	}
-	return utxos[start:end], int64(len(utxos)), nil
+	options := normalizeHistoryQueryOptions(pageStr, limitStr, confirmedOnlyStr, sortStr)
+	page, total := filterSortPaginateHistoryTxs(txs, options)
+	return page, total, nil
 }
 
 type HistoryUTXO struct {
@@ -676,12 +664,107 @@ func (i *UTXOIndexer) GetHistoryUTXOList(address string) (history []HistoryUTXO,
 }
 
 type HistoryTx struct {
-	TxID      string `json:"tx_id"`
-	Timestamp string `json:"time"`
-	Income    uint64 `json:"income"`
-	Spend     uint64 `json:"spend"`
-	Type      string `json:"type"` // "income", "spend", "mixed"
-	IsMempool bool   `json:"is_mempool"`
+	TxID          string  `json:"tx_id"`
+	Timestamp     string  `json:"time"`
+	TimestampUnix int64   `json:"timestamp,omitempty"`
+	Income        uint64  `json:"income"`
+	Spend         uint64  `json:"spend"`
+	Type          string  `json:"type"` // "income", "spend", "mixed"
+	IsMempool     bool    `json:"is_mempool"`
+	Confirmations *uint64 `json:"confirmations,omitempty"`
+	Height        *int64  `json:"height"`
+}
+
+type HistoryQueryOptions struct {
+	Page          int
+	Limit         int
+	ConfirmedOnly bool
+	Sort          string
+}
+
+func normalizeHistoryQueryOptions(pageStr, limitStr, confirmedOnlyStr, sortStr string) HistoryQueryOptions {
+	page, err := strconv.Atoi(pageStr)
+	if err != nil || page < 1 {
+		page = 1
+	}
+
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit < 1 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	sortOrder := strings.ToLower(strings.TrimSpace(sortStr))
+	if sortOrder != "asc" && sortOrder != "desc" {
+		sortOrder = "desc"
+	}
+
+	return HistoryQueryOptions{
+		Page:          page,
+		Limit:         limit,
+		ConfirmedOnly: isTruthyHistoryOption(confirmedOnlyStr),
+		Sort:          sortOrder,
+	}
+}
+
+func isTruthyHistoryOption(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func filterSortPaginateHistoryTxs(txs []HistoryTx, options HistoryQueryOptions) ([]HistoryTx, int64) {
+	page := options.Page
+	if page < 1 {
+		page = 1
+	}
+	limit := options.Limit
+	if limit < 1 {
+		limit = 20
+	}
+
+	filtered := make([]HistoryTx, 0, len(txs))
+	for _, tx := range txs {
+		if options.ConfirmedOnly && tx.IsMempool {
+			continue
+		}
+		filtered = append(filtered, tx)
+	}
+
+	sortOrder := strings.ToLower(options.Sort)
+	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].TimestampUnix == filtered[j].TimestampUnix {
+			return filtered[i].TxID < filtered[j].TxID
+		}
+		if sortOrder == "asc" {
+			return filtered[i].TimestampUnix < filtered[j].TimestampUnix
+		}
+		return filtered[i].TimestampUnix > filtered[j].TimestampUnix
+	})
+
+	total := int64(len(filtered))
+	start := (page - 1) * limit
+	if start >= len(filtered) {
+		return []HistoryTx{}, total
+	}
+	end := start + limit
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	return filtered[start:end], total
+}
+
+func historyConfirmations(isMempool bool) *uint64 {
+	if !isMempool {
+		return nil
+	}
+	var confirmations uint64
+	return &confirmations
 }
 
 func (i *UTXOIndexer) GetHistoryTxList(address string) (txs []HistoryTx, err error) {
@@ -692,9 +775,11 @@ func (i *UTXOIndexer) GetHistoryTxList(address string) (txs []HistoryTx, err err
 	getTx := func(txid string, ts int64, isMempool bool) *HistoryTx {
 		if _, ok := txMap[txid]; !ok {
 			txMap[txid] = &HistoryTx{
-				TxID:      txid,
-				Timestamp: time.Unix(ts, 0).Format("2006-01-02 15:04:05"),
-				IsMempool: isMempool,
+				TxID:          txid,
+				Timestamp:     time.Unix(ts, 0).Format("2006-01-02 15:04:05"),
+				TimestampUnix: ts,
+				IsMempool:     isMempool,
+				Confirmations: historyConfirmations(isMempool),
 			}
 		}
 		return txMap[txid]
@@ -808,9 +893,11 @@ func (i *UTXOIndexer) GetHistoryTxList(address string) (txs []HistoryTx, err err
 		txs = append(txs, *tx)
 	}
 
-	// Sort
 	sort.Slice(txs, func(i, j int) bool {
-		return txs[i].Timestamp > txs[j].Timestamp
+		if txs[i].TimestampUnix == txs[j].TimestampUnix {
+			return txs[i].TxID < txs[j].TxID
+		}
+		return txs[i].TimestampUnix > txs[j].TimestampUnix
 	})
 
 	return txs, nil
