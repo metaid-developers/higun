@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 func SatoshiToDecimalString(value uint64) string {
@@ -70,6 +71,84 @@ func NormalizeUTXOs(input []WalletUTXO, opts UTXOOptions) ([]WalletUTXO, error) 
 		return result[i].Satoshi > result[j].Satoshi
 	})
 	return result, nil
+}
+
+func NormalizeHistoryOptions(pageRaw, limitRaw, confirmedOnlyRaw, sortRaw string) (HistoryOptions, error) {
+	page, err := strconv.Atoi(strings.TrimSpace(pageRaw))
+	if err != nil || page < 1 {
+		page = 1
+	}
+	limit, err := strconv.Atoi(strings.TrimSpace(limitRaw))
+	if err != nil || limit < 1 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	confirmedOnly, err := parseBoolDefault(confirmedOnlyRaw, false)
+	if err != nil {
+		return HistoryOptions{}, NewHTTPWalletError(http.StatusBadRequest, CodeInvalidQuery, "confirmedOnly must be true or false")
+	}
+	sortOrder := strings.ToLower(strings.TrimSpace(sortRaw))
+	if sortOrder == "" {
+		sortOrder = "desc"
+	}
+	if sortOrder != "asc" && sortOrder != "desc" {
+		return HistoryOptions{}, NewHTTPWalletError(http.StatusBadRequest, CodeInvalidQuery, "sort must be asc or desc")
+	}
+	return HistoryOptions{Page: page, Limit: limit, ConfirmedOnly: confirmedOnly, Sort: sortOrder}, nil
+}
+
+func normalizeCoreHistory(chain Chain, address string, options HistoryOptions, payload coreHistoryResponse) (WalletHistoryPage, error) {
+	items := make([]WalletHistoryItem, 0, len(payload.List))
+	for _, item := range payload.List {
+		txid, ok := NormalizeTxID(item.TxID)
+		if !ok {
+			return WalletHistoryPage{}, NewHTTPWalletError(http.StatusBadGateway, CodeInvalidUpstream, "invalid upstream response")
+		}
+		confirmations := item.Confirmations
+		if item.IsMempool {
+			zero := uint64(0)
+			confirmations = &zero
+		}
+		direction := strings.ToLower(strings.TrimSpace(item.Type))
+		if direction == "" {
+			direction = directionFromAmounts(item.Income, item.Spend)
+		}
+		items = append(items, WalletHistoryItem{
+			TxID:          txid,
+			Direction:     direction,
+			IncomeSatoshi: item.Income,
+			SpendSatoshi:  item.Spend,
+			NetSatoshi:    uint64DeltaToInt64(item.Income, item.Spend),
+			Confirmed:     !item.IsMempool,
+			Mempool:       item.IsMempool,
+			Confirmations: confirmations,
+			Height:        item.Height,
+			Timestamp:     item.Timestamp,
+			Time:          item.Time,
+		})
+	}
+	return WalletHistoryPage{
+		Chain:         chain,
+		Address:       address,
+		Page:          options.Page,
+		Limit:         options.Limit,
+		ConfirmedOnly: options.ConfirmedOnly,
+		Sort:          options.Sort,
+		Total:         payload.Total,
+		Items:         items,
+	}, nil
+}
+
+func directionFromAmounts(income, spend uint64) string {
+	if income > 0 && spend > 0 {
+		return "mixed"
+	}
+	if spend > 0 {
+		return "spend"
+	}
+	return "income"
 }
 
 func normalizeCoreTxDetail(chain Chain, payload coreTxDetailResponse) (WalletTxDetail, error) {

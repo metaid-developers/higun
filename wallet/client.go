@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -72,6 +73,25 @@ type coreTxOutput struct {
 	Vout    uint32 `json:"vout"`
 	Address string `json:"address"`
 	Satoshi uint64 `json:"satoshi"`
+}
+
+type coreHistoryResponse struct {
+	Address string            `json:"address"`
+	List    []coreHistoryItem `json:"list"`
+	Count   int               `json:"count"`
+	Total   int64             `json:"total"`
+}
+
+type coreHistoryItem struct {
+	TxID          string  `json:"tx_id"`
+	Time          string  `json:"time"`
+	Timestamp     int64   `json:"timestamp"`
+	Income        uint64  `json:"income"`
+	Spend         uint64  `json:"spend"`
+	Type          string  `json:"type"`
+	IsMempool     bool    `json:"is_mempool"`
+	Confirmations *uint64 `json:"confirmations"`
+	Height        *int64  `json:"height"`
 }
 
 func NewCoreClient(baseURL string, timeout time.Duration) (*CoreClient, error) {
@@ -200,6 +220,26 @@ func (c *CoreClient) FetchTransaction(ctx context.Context, chain Chain, txid str
 		return WalletTxDetail{}, err
 	}
 	return normalizeCoreTxDetail(chain, payload)
+}
+
+func (c *CoreClient) FetchHistory(ctx context.Context, chain Chain, address string, options HistoryOptions) (WalletHistoryPage, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/utxos/history", nil)
+	if err != nil {
+		return WalletHistoryPage{}, NewHTTPWalletError(http.StatusInternalServerError, CodeInternal, "internal wallet error")
+	}
+	query := req.URL.Query()
+	query.Set("address", address)
+	query.Set("page", strconv.Itoa(options.Page))
+	query.Set("limit", strconv.Itoa(options.Limit))
+	query.Set("confirmedOnly", strconv.FormatBool(options.ConfirmedOnly))
+	query.Set("sort", options.Sort)
+	req.URL.RawQuery = query.Encode()
+
+	var payload coreHistoryResponse
+	if err := c.getJSON(req, &payload); err != nil {
+		return WalletHistoryPage{}, err
+	}
+	return normalizeCoreHistory(chain, address, options, payload)
 }
 
 type logWalletUpstreamOptions struct {

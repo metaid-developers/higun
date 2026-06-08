@@ -22,6 +22,7 @@ type fakeWalletService struct {
 	utxoCalls      int
 	broadcastCalls int
 	txCalls        int
+	historyCalls   int
 }
 
 func (s *fakeWalletService) GetBalance(ctx context.Context, chain Chain, address string) (WalletBalance, error) {
@@ -236,10 +237,101 @@ func TestTxDetailHandlerRejectsInvalidTxIDBeforeService(t *testing.T) {
 }
 
 func (s *fakeWalletService) GetHistory(ctx context.Context, chain Chain, address string, options HistoryOptions) (WalletHistoryPage, error) {
+	s.historyCalls++
 	if s.err != nil {
 		return WalletHistoryPage{}, s.err
 	}
-	return WalletHistoryPage{Chain: chain, Address: address, Page: options.Page, Limit: options.Limit, ConfirmedOnly: options.ConfirmedOnly, Sort: options.Sort}, nil
+	confirmations := uint64(0)
+	return WalletHistoryPage{
+		Chain:         chain,
+		Address:       address,
+		Page:          options.Page,
+		Limit:         options.Limit,
+		ConfirmedOnly: options.ConfirmedOnly,
+		Sort:          options.Sort,
+		Total:         1,
+		Items: []WalletHistoryItem{
+			{
+				TxID:          strings.Repeat("a", 64),
+				Direction:     "income",
+				IncomeSatoshi: 1000,
+				NetSatoshi:    1000,
+				Confirmed:     false,
+				Mempool:       true,
+				Confirmations: &confirmations,
+				Timestamp:     1717833600,
+				Time:          "2026-06-08 12:00:00",
+			},
+		},
+	}, nil
+}
+
+func TestHistoryHandler(t *testing.T) {
+	router := newHandlerTestRouter(&fakeWalletService{})
+
+	w := performWalletRequest(router, "/wallet/v1/btc/address/addr/history?page=1&limit=20")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		`"address":"addr"`,
+		`"mempool":true`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("response missing %s: %s", want, body)
+		}
+	}
+}
+
+func TestHistoryHandlerSupportsAllV11Chains(t *testing.T) {
+	router := newHandlerTestRouter(&fakeWalletService{})
+	for _, chain := range []string{"btc", "mvc", "doge"} {
+		t.Run(chain, func(t *testing.T) {
+			w := performWalletRequest(router, "/wallet/v1/"+chain+"/address/addr/history")
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), `"chain":"`+chain+`"`) {
+				t.Fatalf("response missing chain %s: %s", chain, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestHistoryHandlerRejectsInvalidSortBeforeService(t *testing.T) {
+	service := &fakeWalletService{}
+	router := newHandlerTestRouter(service)
+
+	w := performWalletRequest(router, "/wallet/v1/btc/address/addr/history?sort=random")
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "sort must be asc or desc") {
+		t.Fatalf("response missing sort validation message: %s", w.Body.String())
+	}
+	if service.historyCalls != 0 {
+		t.Fatalf("history service calls = %d, want 0", service.historyCalls)
+	}
+}
+
+func TestHistoryHandlerRejectsInvalidConfirmedOnlyBeforeService(t *testing.T) {
+	service := &fakeWalletService{}
+	router := newHandlerTestRouter(service)
+
+	w := performWalletRequest(router, "/wallet/v1/btc/address/addr/history?confirmedOnly=maybe")
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "confirmedOnly must be true or false") {
+		t.Fatalf("response missing confirmedOnly validation message: %s", w.Body.String())
+	}
+	if service.historyCalls != 0 {
+		t.Fatalf("history service calls = %d, want 0", service.historyCalls)
+	}
 }
 
 func newHandlerTestRouter(service WalletService) *gin.Engine {

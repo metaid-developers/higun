@@ -93,6 +93,34 @@ type StandardTxOutputItem struct {
 	Amount  string `json:"amount"`
 }
 
+type StandardHistoryData struct {
+	Chain         Chain                 `json:"chain"`
+	Address       string                `json:"address"`
+	Page          int                   `json:"page"`
+	Limit         int                   `json:"limit"`
+	ConfirmedOnly bool                  `json:"confirmedOnly"`
+	Sort          string                `json:"sort"`
+	Total         int64                 `json:"total"`
+	Items         []StandardHistoryItem `json:"items"`
+}
+
+type StandardHistoryItem struct {
+	TxID          string  `json:"txid"`
+	Direction     string  `json:"direction"`
+	IncomeSatoshi uint64  `json:"incomeSatoshi"`
+	SpendSatoshi  uint64  `json:"spendSatoshi"`
+	NetSatoshi    int64   `json:"netSatoshi"`
+	Income        string  `json:"income"`
+	Spend         string  `json:"spend"`
+	Net           string  `json:"net"`
+	Confirmed     bool    `json:"confirmed"`
+	Mempool       bool    `json:"mempool"`
+	Confirmations *uint64 `json:"confirmations"`
+	Height        *int64  `json:"height"`
+	Timestamp     int64   `json:"timestamp"`
+	Time          string  `json:"time"`
+}
+
 func Success(data any) Envelope {
 	return Envelope{Code: CodeSuccess, Message: "success", Data: data}
 }
@@ -188,6 +216,38 @@ func NewStandardTxDetailResponse(detail WalletTxDetail) Envelope {
 		data.Fee = &fee
 	}
 	return Success(data)
+}
+
+func NewStandardHistoryResponse(page WalletHistoryPage) Envelope {
+	items := make([]StandardHistoryItem, 0, len(page.Items))
+	for _, item := range page.Items {
+		items = append(items, StandardHistoryItem{
+			TxID:          item.TxID,
+			Direction:     item.Direction,
+			IncomeSatoshi: item.IncomeSatoshi,
+			SpendSatoshi:  item.SpendSatoshi,
+			NetSatoshi:    item.NetSatoshi,
+			Income:        SatoshiToDecimalString(item.IncomeSatoshi),
+			Spend:         SatoshiToDecimalString(item.SpendSatoshi),
+			Net:           SignedSatoshiToDecimalString(item.NetSatoshi),
+			Confirmed:     item.Confirmed,
+			Mempool:       item.Mempool,
+			Confirmations: item.Confirmations,
+			Height:        item.Height,
+			Timestamp:     item.Timestamp,
+			Time:          item.Time,
+		})
+	}
+	return Success(StandardHistoryData{
+		Chain:         page.Chain,
+		Address:       page.Address,
+		Page:          page.Page,
+		Limit:         page.Limit,
+		ConfirmedOnly: page.ConfirmedOnly,
+		Sort:          page.Sort,
+		Total:         page.Total,
+		Items:         items,
+	})
 }
 
 func NewStandardUTXOResponse(chain Chain, address string, confirmedOnly bool, sortOrder string, utxos []WalletUTXO) Envelope {

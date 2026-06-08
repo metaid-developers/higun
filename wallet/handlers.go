@@ -161,6 +161,37 @@ func (g *Gateway) getTransaction(c *gin.Context) {
 	c.JSON(http.StatusOK, NewStandardTxDetailResponse(detail))
 }
 
+func (g *Gateway) getHistory(c *gin.Context) {
+	if !g.ensureService(c) {
+		return
+	}
+	chain, ok := g.parseChain(c)
+	if !ok {
+		return
+	}
+	address := strings.TrimSpace(c.Param("address"))
+	if address == "" {
+		g.writeWalletError(c, NewHTTPWalletError(http.StatusBadRequest, CodeInvalidAddress, "address is required"))
+		return
+	}
+	options, err := NormalizeHistoryOptions(c.DefaultQuery("page", "1"), c.DefaultQuery("limit", "20"), c.Query("confirmedOnly"), c.DefaultQuery("sort", "desc"))
+	if err != nil {
+		var walletErr *WalletError
+		if errors.As(err, &walletErr) {
+			g.writeWalletError(c, walletErr)
+			return
+		}
+		g.writeServiceError(c, err)
+		return
+	}
+	page, err := g.service.GetHistory(c.Request.Context(), chain, address, options)
+	if err != nil {
+		g.writeServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, NewStandardHistoryResponse(page))
+}
+
 func (g *Gateway) parseChain(c *gin.Context) (Chain, bool) {
 	chain, ok := NormalizeChain(c.Param("chain"))
 	if !ok {

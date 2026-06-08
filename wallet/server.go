@@ -155,7 +155,11 @@ func (s *GatewayService) GetTransaction(ctx context.Context, chain Chain, txid s
 }
 
 func (s *GatewayService) GetHistory(ctx context.Context, chain Chain, address string, options HistoryOptions) (WalletHistoryPage, error) {
-	return WalletHistoryPage{}, NewHTTPWalletError(http.StatusNotImplemented, CodeInternal, "internal wallet error")
+	client, ok := s.clients[chain]
+	if !ok {
+		return WalletHistoryPage{}, NewHTTPWalletError(http.StatusServiceUnavailable, CodeCoreUnavailable, "chain core is not configured")
+	}
+	return client.FetchHistory(ctx, chain, address, options)
 }
 
 func RegisterRoutes(router gin.IRouter, gateway *Gateway) {
@@ -163,5 +167,6 @@ func RegisterRoutes(router gin.IRouter, gateway *Gateway) {
 	router.POST("/wallet/v1/:chain/tx/broadcast", gateway.broadcastTransaction)
 	router.GET("/wallet/v1/:chain/tx/:txid", gateway.getTransaction)
 	router.GET("/wallet/v1/:chain/address/:address/balance", gateway.getBalance)
+	router.GET("/wallet/v1/:chain/address/:address/history", gateway.getHistory)
 	router.GET("/wallet/v1/:chain/address/:address/utxos", gateway.getUTXOs)
 }
