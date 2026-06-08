@@ -14,12 +14,15 @@ import (
 )
 
 type fakeWalletService struct {
-	balance WalletBalance
-	utxos   []WalletUTXO
-	err     error
+	balance      WalletBalance
+	utxos        []WalletUTXO
+	err          error
+	balanceCalls int
+	utxoCalls    int
 }
 
 func (s *fakeWalletService) GetBalance(ctx context.Context, chain Chain, address string) (WalletBalance, error) {
+	s.balanceCalls++
 	if s.err != nil {
 		return WalletBalance{}, s.err
 	}
@@ -30,6 +33,7 @@ func (s *fakeWalletService) GetBalance(ctx context.Context, chain Chain, address
 }
 
 func (s *fakeWalletService) GetUTXOs(ctx context.Context, chain Chain, address string) ([]WalletUTXO, error) {
+	s.utxoCalls++
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -140,6 +144,61 @@ func TestUTXOHandlerConfirmedOnly(t *testing.T) {
 	}
 }
 
+func TestUTXOHandlerRejectsInvalidSortBeforeService(t *testing.T) {
+	service := &fakeWalletService{utxos: []WalletUTXO{
+		{TxID: "tx", Vout: 0, Satoshi: 100, Confirmed: true},
+	}}
+	router := newHandlerTestRouter(service)
+
+	w := performWalletRequest(router, "/wallet/v1/btc/address/addr-btc/utxos?sort=random")
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "sort must be asc or desc") {
+		t.Fatalf("response missing sort validation message: %s", w.Body.String())
+	}
+	if service.utxoCalls != 0 {
+		t.Fatalf("service calls = %d, want 0", service.utxoCalls)
+	}
+}
+
+func TestUTXOHandlerNormalizesSortQuery(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "uppercase",
+			path: "/wallet/v1/btc/address/addr-btc/utxos?sort=DESC",
+			want: `"sort":"desc"`,
+		},
+		{
+			name: "trimmed",
+			path: "/wallet/v1/btc/address/addr-btc/utxos?sort=desc%20",
+			want: `"sort":"desc"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router := newHandlerTestRouter(&fakeWalletService{utxos: []WalletUTXO{
+				{TxID: "tx", Vout: 0, Satoshi: 100, Confirmed: true},
+			}})
+
+			w := performWalletRequest(router, tt.path)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), tt.want) {
+				t.Fatalf("response missing normalized sort %s: %s", tt.want, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestHandlerRejectsInvalidChainAndFormat(t *testing.T) {
 	router := newHandlerTestRouter(&fakeWalletService{})
 
@@ -178,7 +237,7 @@ func TestHandlerRejectsInvalidChainAndFormat(t *testing.T) {
 
 func TestHandlerMapsCoreUnavailableToBadGateway(t *testing.T) {
 	router := newHandlerTestRouter(&fakeWalletService{
-		err: NewHTTPWalletError(http.StatusBadGateway, CodeCoreUnavailable, "core unavailable"),
+		err: NewHTTPWalletError(http.StatusBadGateway, CodeCoreUnavailable, "dial tcp http://internal-core.local/balance failed"),
 	})
 
 	w := performWalletRequest(router, "/wallet/v1/btc/address/addr-btc/balance")
@@ -188,6 +247,30 @@ func TestHandlerMapsCoreUnavailableToBadGateway(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "core unavailable") {
 		t.Fatalf("response missing service error: %s", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "internal-core.local") {
+		t.Fatalf("response leaked upstream detail: %s", w.Body.String())
+	}
+}
+
+func TestHandlerMapsInvalidUpstreamToSafeMessage(t *testing.T) {
+	router := newHandlerTestRouter(&fakeWalletService{
+		err: NewHTTPWalletError(http.StatusBadGateway, CodeInvalidUpstream, "json parse failed for addr-btc via http://internal-core.local"),
+	})
+
+	w := performWalletRequest(router, "/wallet/v1/btc/address/addr-btc/balance")
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "invalid upstream response") {
+		t.Fatalf("response missing safe upstream message: %s", body)
+	}
+	for _, leaked := range []string{"json parse failed", "addr-btc", "internal-core.local"} {
+		if strings.Contains(body, leaked) {
+			t.Fatalf("response leaked %q: %s", leaked, body)
+		}
 	}
 }
 
@@ -214,15 +297,49 @@ func TestGatewayServiceDisabledChainReturnsServiceUnavailable(t *testing.T) {
 }
 
 func TestHandlerMapsPlainErrorToInternalError(t *testing.T) {
-	router := newHandlerTestRouter(&fakeWalletService{err: errors.New("plain failure")})
+	router := newHandlerTestRouter(&fakeWalletService{err: errors.New("plain failure with http://internal-service.local and addr-btc")})
 
 	w := performWalletRequest(router, "/wallet/v1/btc/address/addr-btc/balance")
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500; body: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "plain failure") {
-		t.Fatalf("response missing wrapped plain error: %s", w.Body.String())
+	body := w.Body.String()
+	if !strings.Contains(body, "internal wallet error") {
+		t.Fatalf("response missing safe internal error: %s", body)
+	}
+	for _, leaked := range []string{"plain failure", "internal-service.local", "addr-btc"} {
+		if strings.Contains(body, leaked) {
+			t.Fatalf("response leaked %q: %s", leaked, body)
+		}
+	}
+}
+
+func TestHandlerReturnsServiceUnavailableWhenServiceIsNil(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	RegisterRoutes(router, NewGateway(nil))
+
+	for _, path := range []string{
+		"/wallet/v1/btc/address/addr-btc/balance",
+		"/wallet/v1/btc/address/addr-btc/utxos",
+	} {
+		t.Run(path, func(t *testing.T) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					t.Fatalf("handler panicked: %v", recovered)
+				}
+			}()
+
+			w := performWalletRequest(router, path)
+
+			if w.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want 503; body: %s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), "wallet service is not configured") {
+				t.Fatalf("response missing nil service message: %s", w.Body.String())
+			}
+		})
 	}
 }
 

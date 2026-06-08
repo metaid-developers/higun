@@ -10,6 +10,9 @@ import (
 )
 
 func (g *Gateway) getBalance(c *gin.Context) {
+	if !g.ensureService(c) {
+		return
+	}
 	chain, format, ok := g.parseCommon(c)
 	if !ok {
 		return
@@ -38,6 +41,9 @@ func (g *Gateway) getBalance(c *gin.Context) {
 }
 
 func (g *Gateway) getUTXOs(c *gin.Context) {
+	if !g.ensureService(c) {
+		return
+	}
 	chain, format, ok := g.parseCommon(c)
 	if !ok {
 		return
@@ -53,7 +59,11 @@ func (g *Gateway) getUTXOs(c *gin.Context) {
 		g.writeWalletError(c, NewHTTPWalletError(http.StatusBadRequest, CodeInvalidQuery, "confirmedOnly must be true or false"))
 		return
 	}
-	sortOrder := c.DefaultQuery("sort", "desc")
+	sortOrder, sortErr := parseSortDefault(c.DefaultQuery("sort", "desc"))
+	if sortErr != nil {
+		g.writeWalletError(c, sortErr)
+		return
+	}
 
 	utxos, err := g.service.GetUTXOs(c.Request.Context(), chain, address)
 	if err != nil {
@@ -87,16 +97,24 @@ func (g *Gateway) parseCommon(c *gin.Context) (Chain, ResponseFormat, bool) {
 	return chain, format, true
 }
 
+func (g *Gateway) ensureService(c *gin.Context) bool {
+	if g != nil && g.service != nil {
+		return true
+	}
+	g.writeWalletError(c, NewHTTPWalletError(http.StatusServiceUnavailable, CodeCoreUnavailable, "wallet service is not configured"))
+	return false
+}
+
 func (g *Gateway) writeServiceError(c *gin.Context, err error) {
 	var walletErr *WalletError
 	if errors.As(err, &walletErr) {
 		if walletErr.HTTPStatus == 0 {
 			walletErr.HTTPStatus = http.StatusInternalServerError
 		}
-		g.writeWalletError(c, walletErr)
+		g.writeWalletError(c, publicServiceError(walletErr))
 		return
 	}
-	g.writeWalletError(c, NewHTTPWalletError(http.StatusInternalServerError, CodeInternal, err.Error()))
+	g.writeWalletError(c, NewHTTPWalletError(http.StatusInternalServerError, CodeInternal, "internal wallet error"))
 }
 
 func (g *Gateway) writeWalletError(c *gin.Context, err *WalletError) {
@@ -112,4 +130,28 @@ func parseBoolDefault(raw string, defaultValue bool) (bool, error) {
 		return defaultValue, nil
 	}
 	return strconv.ParseBool(raw)
+}
+
+func parseSortDefault(raw string) (string, *WalletError) {
+	sortOrder := strings.ToLower(strings.TrimSpace(raw))
+	if sortOrder == "" {
+		sortOrder = "desc"
+	}
+	if sortOrder != "asc" && sortOrder != "desc" {
+		return "", NewHTTPWalletError(http.StatusBadRequest, CodeInvalidQuery, "sort must be asc or desc")
+	}
+	return sortOrder, nil
+}
+
+func publicServiceError(err *WalletError) *WalletError {
+	message := "internal wallet error"
+	switch err.Code {
+	case CodeCoreUnavailable:
+		message = "core unavailable"
+	case CodeInvalidUpstream:
+		message = "invalid upstream response"
+	case CodeInternal:
+		message = "internal wallet error"
+	}
+	return NewHTTPWalletError(err.HTTPStatus, err.Code, message)
 }
