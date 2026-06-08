@@ -14,6 +14,11 @@ type broadcastRequest struct {
 	RawTx string `json:"rawTx"`
 }
 
+const (
+	maxBroadcastRawTxBytes = 1_000_000
+	maxBroadcastBodyBytes  = maxBroadcastRawTxBytes + 1024
+)
+
 func (g *Gateway) getBalance(c *gin.Context) {
 	if !g.ensureService(c) {
 		return
@@ -113,12 +118,13 @@ func (g *Gateway) broadcastTransaction(c *gin.Context) {
 		return
 	}
 	var req broadcastRequest
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBroadcastBodyBytes)
 	if err := c.ShouldBindJSON(&req); err != nil {
 		g.writeWalletError(c, NewHTTPWalletError(http.StatusBadRequest, CodeInvalidRawTx, "invalid raw transaction"))
 		return
 	}
 	rawTx := strings.TrimSpace(req.RawTx)
-	if rawTx == "" || len(rawTx) > 1_000_000 {
+	if rawTx == "" || len(rawTx) > maxBroadcastRawTxBytes {
 		g.writeWalletError(c, NewHTTPWalletError(http.StatusBadRequest, CodeInvalidRawTx, "invalid raw transaction"))
 		return
 	}

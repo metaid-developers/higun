@@ -14,12 +14,13 @@ import (
 )
 
 type fakeWalletService struct {
-	balance      WalletBalance
-	utxos        []WalletUTXO
-	feeRate      FeeRate
-	err          error
-	balanceCalls int
-	utxoCalls    int
+	balance        WalletBalance
+	utxos          []WalletUTXO
+	feeRate        FeeRate
+	err            error
+	balanceCalls   int
+	utxoCalls      int
+	broadcastCalls int
 }
 
 func (s *fakeWalletService) GetBalance(ctx context.Context, chain Chain, address string) (WalletBalance, error) {
@@ -96,6 +97,7 @@ func TestFeeRateHandlerSupportsAllV11Chains(t *testing.T) {
 }
 
 func (s *fakeWalletService) BroadcastTransaction(ctx context.Context, chain Chain, rawTx string) (BroadcastResult, error) {
+	s.broadcastCalls++
 	if s.err != nil {
 		return BroadcastResult{}, s.err
 	}
@@ -150,6 +152,30 @@ func TestBroadcastHandlerRejectsInvalidRawTxBeforeService(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "invalid raw transaction") {
 		t.Fatalf("response missing invalid raw transaction: %s", w.Body.String())
+	}
+	if service.broadcastCalls != 0 {
+		t.Fatalf("broadcast service calls = %d, want 0", service.broadcastCalls)
+	}
+}
+
+func TestBroadcastHandlerRejectsOversizedBodyBeforeService(t *testing.T) {
+	service := &fakeWalletService{}
+	router := newHandlerTestRouter(service)
+	body := strings.Repeat(" ", maxBroadcastBodyBytes+1)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/wallet/v1/btc/tx/broadcast", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "invalid raw transaction") {
+		t.Fatalf("response missing invalid raw transaction: %s", w.Body.String())
+	}
+	if service.broadcastCalls != 0 {
+		t.Fatalf("broadcast service calls = %d, want 0", service.broadcastCalls)
 	}
 }
 

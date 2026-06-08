@@ -36,7 +36,7 @@ func TestCoreClientBroadcastTransactionUsesConfiguredPathAndNormalizesLegacySucc
 		t.Fatalf("path = %s, want /btc/broadcast", gotPath)
 	}
 	if gotBody["rawTx"] != "deadbeef" {
-		t.Fatalf("rawTx body = %q, want deadbeef", gotBody["rawTx"])
+		t.Fatalf("rawTx body was not forwarded as expected")
 	}
 	if got.TxID != strings.Repeat("a", 64) || !got.Accepted || got.Chain != ChainBTC {
 		t.Fatalf("unexpected broadcast result: %+v", got)
