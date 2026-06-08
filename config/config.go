@@ -33,8 +33,18 @@ type WalletGatewayConfig struct {
 }
 
 type WalletGatewayChainConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	CoreURL string `yaml:"core_url"`
+	Enabled       bool                       `yaml:"enabled"`
+	CoreURL       string                     `yaml:"core_url"`
+	BroadcastPath string                     `yaml:"broadcast_path"`
+	FeeRate       WalletGatewayFeeRateConfig `yaml:"fee_rate"`
+}
+
+type WalletGatewayFeeRateConfig struct {
+	Unit    string `yaml:"unit"`
+	Slow    int64  `yaml:"slow"`
+	Normal  int64  `yaml:"normal"`
+	Fast    int64  `yaml:"fast"`
+	Default string `yaml:"default"`
 }
 
 var GlobalConfig *Config
@@ -162,9 +172,42 @@ func LoadConfig(path string) (*Config, error) {
 			Enabled:        false,
 			TimeoutSeconds: 10,
 			Chains: map[string]WalletGatewayChainConfig{
-				ChainBTC:  {Enabled: false, CoreURL: ""},
-				ChainMVC:  {Enabled: false, CoreURL: ""},
-				ChainDOGE: {Enabled: false, CoreURL: ""},
+				ChainBTC: {
+					Enabled:       false,
+					CoreURL:       "",
+					BroadcastPath: "/btc/broadcast",
+					FeeRate: WalletGatewayFeeRateConfig{
+						Unit:    "sat_per_byte",
+						Slow:    1,
+						Normal:  3,
+						Fast:    5,
+						Default: "normal",
+					},
+				},
+				ChainMVC: {
+					Enabled:       false,
+					CoreURL:       "",
+					BroadcastPath: "/btc/broadcast",
+					FeeRate: WalletGatewayFeeRateConfig{
+						Unit:    "sat_per_byte",
+						Slow:    1,
+						Normal:  2,
+						Fast:    3,
+						Default: "normal",
+					},
+				},
+				ChainDOGE: {
+					Enabled:       false,
+					CoreURL:       "",
+					BroadcastPath: "/btc/broadcast",
+					FeeRate: WalletGatewayFeeRateConfig{
+						Unit:    "sat_per_byte",
+						Slow:    1,
+						Normal:  2,
+						Fast:    5,
+						Default: "normal",
+					},
+				},
 			},
 		},
 		ZmqReconnectInterval: 5,
@@ -254,6 +297,9 @@ func LoadConfig(path string) (*Config, error) {
 	applyWalletChainEnv(cfg, ChainBTC, "WALLET_BTC_CORE_URL")
 	applyWalletChainEnv(cfg, ChainMVC, "WALLET_MVC_CORE_URL")
 	applyWalletChainEnv(cfg, ChainDOGE, "WALLET_DOGE_CORE_URL")
+	applyWalletV11Env(cfg, ChainBTC, "WALLET_BTC")
+	applyWalletV11Env(cfg, ChainMVC, "WALLET_MVC")
+	applyWalletV11Env(cfg, ChainDOGE, "WALLET_DOGE")
 	// if maxTxPerBatch := os.Getenv("MAX_TX_PER_BATCH"); maxTxPerBatch != "" {
 	// 	val, err := strconv.Atoi(maxTxPerBatch)
 	// 	if err == nil && val > 0 {
@@ -278,6 +324,26 @@ func LoadConfig(path string) (*Config, error) {
 	return cfg, nil
 }
 
+func defaultWalletChainConfig(chain string) WalletGatewayChainConfig {
+	switch chain {
+	case ChainMVC:
+		return WalletGatewayChainConfig{
+			BroadcastPath: "/btc/broadcast",
+			FeeRate:       WalletGatewayFeeRateConfig{Unit: "sat_per_byte", Slow: 1, Normal: 2, Fast: 3, Default: "normal"},
+		}
+	case ChainDOGE:
+		return WalletGatewayChainConfig{
+			BroadcastPath: "/btc/broadcast",
+			FeeRate:       WalletGatewayFeeRateConfig{Unit: "sat_per_byte", Slow: 1, Normal: 2, Fast: 5, Default: "normal"},
+		}
+	default:
+		return WalletGatewayChainConfig{
+			BroadcastPath: "/btc/broadcast",
+			FeeRate:       WalletGatewayFeeRateConfig{Unit: "sat_per_byte", Slow: 1, Normal: 3, Fast: 5, Default: "normal"},
+		}
+	}
+}
+
 func ensureWalletChainConfig(cfg *Config) {
 	if cfg.Wallet.TimeoutSeconds <= 0 {
 		cfg.Wallet.TimeoutSeconds = 10
@@ -286,9 +352,31 @@ func ensureWalletChainConfig(cfg *Config) {
 		cfg.Wallet.Chains = make(map[string]WalletGatewayChainConfig)
 	}
 	for _, chain := range []string{ChainBTC, ChainMVC, ChainDOGE} {
-		if _, exists := cfg.Wallet.Chains[chain]; !exists {
-			cfg.Wallet.Chains[chain] = WalletGatewayChainConfig{}
+		defaults := defaultWalletChainConfig(chain)
+		chainCfg, exists := cfg.Wallet.Chains[chain]
+		if !exists {
+			cfg.Wallet.Chains[chain] = defaults
+			continue
 		}
+		if strings.TrimSpace(chainCfg.BroadcastPath) == "" {
+			chainCfg.BroadcastPath = defaults.BroadcastPath
+		}
+		if strings.TrimSpace(chainCfg.FeeRate.Unit) == "" {
+			chainCfg.FeeRate.Unit = defaults.FeeRate.Unit
+		}
+		if chainCfg.FeeRate.Slow == 0 {
+			chainCfg.FeeRate.Slow = defaults.FeeRate.Slow
+		}
+		if chainCfg.FeeRate.Normal == 0 {
+			chainCfg.FeeRate.Normal = defaults.FeeRate.Normal
+		}
+		if chainCfg.FeeRate.Fast == 0 {
+			chainCfg.FeeRate.Fast = defaults.FeeRate.Fast
+		}
+		if strings.TrimSpace(chainCfg.FeeRate.Default) == "" {
+			chainCfg.FeeRate.Default = defaults.FeeRate.Default
+		}
+		cfg.Wallet.Chains[chain] = chainCfg
 	}
 }
 
@@ -301,4 +389,39 @@ func applyWalletChainEnv(cfg *Config, chain string, envName string) {
 	chainCfg.Enabled = true
 	chainCfg.CoreURL = value
 	cfg.Wallet.Chains[chain] = chainCfg
+}
+
+func applyWalletV11Env(cfg *Config, chain string, prefix string) {
+	chainCfg := cfg.Wallet.Chains[chain]
+	if value := strings.TrimSpace(os.Getenv(prefix + "_BROADCAST_PATH")); value != "" {
+		chainCfg.BroadcastPath = value
+	}
+	if value := strings.TrimSpace(os.Getenv(prefix + "_FEE_RATE_UNIT")); value != "" {
+		chainCfg.FeeRate.Unit = value
+	}
+	if value := strings.TrimSpace(os.Getenv(prefix + "_FEE_RATE_DEFAULT")); value != "" {
+		chainCfg.FeeRate.Default = value
+	}
+	if value, ok := parsePositiveInt64Env(prefix + "_FEE_RATE_SLOW"); ok {
+		chainCfg.FeeRate.Slow = value
+	}
+	if value, ok := parsePositiveInt64Env(prefix + "_FEE_RATE_NORMAL"); ok {
+		chainCfg.FeeRate.Normal = value
+	}
+	if value, ok := parsePositiveInt64Env(prefix + "_FEE_RATE_FAST"); ok {
+		chainCfg.FeeRate.Fast = value
+	}
+	cfg.Wallet.Chains[chain] = chainCfg
+}
+
+func parsePositiveInt64Env(name string) (int64, bool) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return 0, false
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 {
+		return 0, false
+	}
+	return value, true
 }

@@ -6,13 +6,17 @@ import (
 )
 
 const (
-	CodeSuccess          = 0
-	CodeUnsupportedChain = -4001
-	CodeInvalidAddress   = -4002
-	CodeInvalidQuery     = -4003
-	CodeCoreUnavailable  = -5001
-	CodeInvalidUpstream  = -5002
-	CodeInternal         = -5003
+	CodeSuccess            = 0
+	CodeUnsupportedChain   = -4001
+	CodeInvalidAddress     = -4002
+	CodeInvalidQuery       = -4003
+	CodeInvalidRawTx       = -4004
+	CodeTxNotFound         = -4041
+	CodeCoreUnavailable    = -5001
+	CodeInvalidUpstream    = -5002
+	CodeInternal           = -5003
+	CodeBroadcastRejected  = -5004
+	CodeFeeRateUnavailable = -5005
 )
 
 type WalletError struct {

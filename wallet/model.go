@@ -26,6 +26,38 @@ const (
 	FormatMetalet  ResponseFormat = "metalet"
 )
 
+const (
+	FeeRateSourceConfig   = "config"
+	FeeRateUnitSatPerByte = "sat_per_byte"
+)
+
+type FeeRate struct {
+	Source  string
+	Unit    string
+	Slow    int64
+	Normal  int64
+	Fast    int64
+	Default string
+}
+
+func (r FeeRate) Validate() error {
+	if strings.TrimSpace(r.Source) == "" {
+		return fmt.Errorf("fee source is required")
+	}
+	if strings.TrimSpace(r.Unit) != FeeRateUnitSatPerByte {
+		return fmt.Errorf("fee unit must be %s", FeeRateUnitSatPerByte)
+	}
+	if r.Slow <= 0 || r.Normal <= 0 || r.Fast <= 0 {
+		return fmt.Errorf("fee tiers must be positive")
+	}
+	switch r.Default {
+	case "slow", "normal", "fast":
+		return nil
+	default:
+		return fmt.Errorf("fee default must be slow, normal, or fast")
+	}
+}
+
 type WalletBalance struct {
 	Chain                Chain
 	Address              string
@@ -100,6 +132,73 @@ type UTXOOptions struct {
 	Sort          string
 }
 
+type BroadcastResult struct {
+	Chain    Chain
+	TxID     string
+	Accepted bool
+}
+
+type WalletTxInput struct {
+	TxID    string
+	Vout    uint32
+	Address string
+	Satoshi *uint64
+}
+
+type WalletTxOutput struct {
+	Vout    uint32
+	Address string
+	Satoshi uint64
+}
+
+type WalletTxDetail struct {
+	Chain         Chain
+	TxID          string
+	Confirmed     bool
+	Mempool       bool
+	Confirmations uint64
+	Height        *int64
+	BlockHash     string
+	BlockTime     *int64
+	Inputs        []WalletTxInput
+	Outputs       []WalletTxOutput
+	FeeSatoshi    *uint64
+	Size          int32
+	Vsize         int32
+}
+
+type HistoryOptions struct {
+	Page          int
+	Limit         int
+	ConfirmedOnly bool
+	Sort          string
+}
+
+type WalletHistoryItem struct {
+	TxID          string
+	Direction     string
+	IncomeSatoshi uint64
+	SpendSatoshi  uint64
+	NetSatoshi    int64
+	Confirmed     bool
+	Mempool       bool
+	Confirmations *uint64
+	Height        *int64
+	Timestamp     int64
+	Time          string
+}
+
+type WalletHistoryPage struct {
+	Chain         Chain
+	Address       string
+	Page          int
+	Limit         int
+	ConfirmedOnly bool
+	Sort          string
+	Total         int64
+	Items         []WalletHistoryItem
+}
+
 func int64Ptr(value int64) *int64 {
 	return &value
 }
@@ -115,6 +214,19 @@ func NormalizeChain(raw string) (Chain, bool) {
 	default:
 		return "", false
 	}
+}
+
+func NormalizeTxID(raw string) (string, bool) {
+	txid := strings.ToLower(strings.TrimSpace(raw))
+	if len(txid) != 64 {
+		return "", false
+	}
+	for _, ch := range txid {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
+			return "", false
+		}
+	}
+	return txid, true
 }
 
 func NormalizeFormat(raw string) (ResponseFormat, bool) {

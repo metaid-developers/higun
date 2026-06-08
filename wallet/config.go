@@ -18,8 +18,17 @@ func FromAppConfig(cfg config.WalletGatewayConfig) Config {
 			continue
 		}
 		out.Chains[chain] = ChainConfig{
-			Enabled: rawChainCfg.Enabled,
-			CoreURL: rawChainCfg.CoreURL,
+			Enabled:       rawChainCfg.Enabled,
+			CoreURL:       rawChainCfg.CoreURL,
+			BroadcastPath: rawChainCfg.BroadcastPath,
+			FeeRate: FeeRate{
+				Source:  FeeRateSourceConfig,
+				Unit:    rawChainCfg.FeeRate.Unit,
+				Slow:    rawChainCfg.FeeRate.Slow,
+				Normal:  rawChainCfg.FeeRate.Normal,
+				Fast:    rawChainCfg.FeeRate.Fast,
+				Default: rawChainCfg.FeeRate.Default,
+			},
 		}
 	}
 	return out

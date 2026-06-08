@@ -46,6 +46,34 @@ func (s *fakeWalletService) GetUTXOs(ctx context.Context, chain Chain, address s
 	return out, nil
 }
 
+func (s *fakeWalletService) GetFeeRate(ctx context.Context, chain Chain) (FeeRate, error) {
+	if s.err != nil {
+		return FeeRate{}, s.err
+	}
+	return FeeRate{Source: FeeRateSourceConfig, Unit: FeeRateUnitSatPerByte, Slow: 1, Normal: 3, Fast: 5, Default: "normal"}, nil
+}
+
+func (s *fakeWalletService) BroadcastTransaction(ctx context.Context, chain Chain, rawTx string) (BroadcastResult, error) {
+	if s.err != nil {
+		return BroadcastResult{}, s.err
+	}
+	return BroadcastResult{Chain: chain, TxID: strings.Repeat("b", 64), Accepted: true}, nil
+}
+
+func (s *fakeWalletService) GetTransaction(ctx context.Context, chain Chain, txid string) (WalletTxDetail, error) {
+	if s.err != nil {
+		return WalletTxDetail{}, s.err
+	}
+	return WalletTxDetail{Chain: chain, TxID: txid, Confirmed: true, Confirmations: 1}, nil
+}
+
+func (s *fakeWalletService) GetHistory(ctx context.Context, chain Chain, address string, options HistoryOptions) (WalletHistoryPage, error) {
+	if s.err != nil {
+		return WalletHistoryPage{}, s.err
+	}
+	return WalletHistoryPage{Chain: chain, Address: address, Page: options.Page, Limit: options.Limit, ConfirmedOnly: options.ConfirmedOnly, Sort: options.Sort}, nil
+}
+
 func newHandlerTestRouter(service WalletService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()

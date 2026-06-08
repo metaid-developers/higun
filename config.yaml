@@ -34,9 +34,30 @@ wallet:
     btc:
       enabled: false
       core_url: "http://127.0.0.1:8066"
+      broadcast_path: "/btc/broadcast"
+      fee_rate:
+        unit: sat_per_byte
+        slow: 1
+        normal: 3
+        fast: 5
+        default: normal
     mvc:
       enabled: false
       core_url: "http://127.0.0.1:8085"
+      broadcast_path: "/btc/broadcast"
+      fee_rate:
+        unit: sat_per_byte
+        slow: 1
+        normal: 2
+        fast: 3
+        default: normal
     doge:
       enabled: false
-      core_url: "http://127.0.0.1:8066"
+      core_url: "http://127.0.0.1:8068"
+      broadcast_path: "/btc/broadcast"
+      fee_rate:
+        unit: sat_per_byte
+        slow: 1
+        normal: 2
+        fast: 5
+        default: normal
