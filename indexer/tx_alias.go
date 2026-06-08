@@ -2,12 +2,18 @@ package indexer
 
 import (
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/metaid/utxo_indexer/storage"
 )
 
-const txIDAliasMetaPrefix = "tx_alias:"
+const (
+	txIDAliasMetaPrefix                    = "tx_alias:"
+	txIDAliasBackfillProgressMetaKey       = "tx_alias_backfill:mvc:last_height"
+	txIDAliasBackfillCompleteHeightMetaKey = "tx_alias_backfill:mvc:complete_height"
+)
 
 func txIDAliasMetaKey(txid string) string {
 	return txIDAliasMetaPrefix + txid
@@ -32,6 +38,10 @@ func (i *UTXOIndexer) storeTxIDAliases(transactions []*Transaction) error {
 	return i.metaStore.BulkSet(aliases)
 }
 
+func (i *UTXOIndexer) StoreTxIDAliases(transactions []*Transaction) error {
+	return i.storeTxIDAliases(transactions)
+}
+
 func (i *UTXOIndexer) ResolveTxIDAlias(txid string) (string, bool, error) {
 	if i == nil || i.metaStore == nil {
 		return "", false, nil
@@ -52,4 +62,48 @@ func (i *UTXOIndexer) ResolveTxIDAlias(txid string) (string, bool, error) {
 		return "", false, nil
 	}
 	return resolved, true, nil
+}
+
+func (i *UTXOIndexer) GetTxIDAliasBackfillProgress() (int, bool, error) {
+	return i.getTxIDAliasBackfillHeight(txIDAliasBackfillProgressMetaKey)
+}
+
+func (i *UTXOIndexer) SetTxIDAliasBackfillProgress(height int) error {
+	return i.setTxIDAliasBackfillHeight(txIDAliasBackfillProgressMetaKey, height)
+}
+
+func (i *UTXOIndexer) GetTxIDAliasBackfillCompleteHeight() (int, bool, error) {
+	return i.getTxIDAliasBackfillHeight(txIDAliasBackfillCompleteHeightMetaKey)
+}
+
+func (i *UTXOIndexer) MarkTxIDAliasBackfillComplete(height int) error {
+	return i.setTxIDAliasBackfillHeight(txIDAliasBackfillCompleteHeightMetaKey, height)
+}
+
+func (i *UTXOIndexer) getTxIDAliasBackfillHeight(key string) (int, bool, error) {
+	if i == nil || i.metaStore == nil {
+		return 0, false, nil
+	}
+	data, err := i.metaStore.Get([]byte(key))
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	height, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, false, fmt.Errorf("invalid txid alias backfill height %q: %w", string(data), err)
+	}
+	return height, true, nil
+}
+
+func (i *UTXOIndexer) setTxIDAliasBackfillHeight(key string, height int) error {
+	if height < 0 {
+		return fmt.Errorf("invalid txid alias backfill height: %d", height)
+	}
+	if i == nil || i.metaStore == nil {
+		return nil
+	}
+	return i.metaStore.Set([]byte(key), []byte(strconv.Itoa(height)))
 }

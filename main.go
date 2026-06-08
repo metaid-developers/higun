@@ -107,6 +107,13 @@ func main() {
 	if mempoolMgr != nil {
 		idx.SetMempoolManager(mempoolMgr)
 	}
+	if cfg.Chain == config.ChainMVC {
+		go func() {
+			if err := bcClient.BackfillMVCTxIDAliases(idx, stopCh); err != nil {
+				log.Printf("[TxIDAliasBackfill] MVC txid alias backfill failed: %v", err)
+			}
+		}()
+	}
 	// Pass mempool manager and blockchain client to API server
 	ApiServer = api.NewServer(idx, metaStore, stopCh)
 	ApiServer.SetMempoolManager(mempoolMgr, bcClient)

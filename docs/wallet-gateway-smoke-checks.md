@@ -9,6 +9,21 @@ Use these checks before publishing a Wallet Gateway configuration.
 - The local gateway URL examples assume API port `3001`; adjust them if `api_port` differs.
 - The `BTC_CORE`, `MVC_CORE`, and `DOGE_CORE` variables below must match the enabled gateway config.
 
+## MVC TxID Alias Backfill
+
+MVC cores automatically start a background txid alias backfill on startup. The backfill is MVC-only: BTC and DOGE do not run it and transaction detail alias lookups remain disabled for non-MVC chains.
+
+The backfill snapshots the current `last_indexed_height`, re-reads indexed MVC blocks through the existing adapter conversion path, and only writes alias metadata such as `tx_alias:<public-txid> = <node-txid>`. It does not rewrite address, UTXO, spend, or history records.
+
+Progress is persisted in `metaStore` after each height under `tx_alias_backfill:mvc:last_height`; completion is marked under `tx_alias_backfill:mvc:complete_height`. Restarting a MVC core resumes from the next height. API startup is not blocked while the backfill runs, so old MVC history txids become fully covered once the backfill reaches their block height. Newly indexed MVC blocks already store aliases during normal indexing.
+
+Useful log check:
+
+```bash
+journalctl -u <service> | rg 'TxIDAliasBackfill'
+docker logs <container> 2>&1 | rg 'TxIDAliasBackfill'
+```
+
 ## Upstream Core Health
 
 Set the core URLs used by this gateway:

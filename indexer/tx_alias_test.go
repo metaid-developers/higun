@@ -48,3 +48,47 @@ func TestTxIDAliasResolverHandlesMissingMetaStore(t *testing.T) {
 		t.Fatalf("ResolveTxIDAlias without meta store = ok:%v err:%v, want no alias", ok, err)
 	}
 }
+
+func TestTxIDAliasBackfillProgressPersists(t *testing.T) {
+	dataDir := t.TempDir()
+	metaStore, err := storage.NewMetaStore(dataDir)
+	if err != nil {
+		t.Fatalf("NewMetaStore: %v", err)
+	}
+
+	idx := &UTXOIndexer{metaStore: metaStore}
+	if _, ok, err := idx.GetTxIDAliasBackfillProgress(); err != nil || ok {
+		t.Fatalf("initial progress = ok:%v err:%v, want missing without error", ok, err)
+	}
+	if err := idx.SetTxIDAliasBackfillProgress(42); err != nil {
+		t.Fatalf("SetTxIDAliasBackfillProgress: %v", err)
+	}
+	if err := idx.MarkTxIDAliasBackfillComplete(42); err != nil {
+		t.Fatalf("MarkTxIDAliasBackfillComplete: %v", err)
+	}
+	if err := metaStore.Close(); err != nil {
+		t.Fatalf("Close first metaStore: %v", err)
+	}
+
+	metaStore, err = storage.NewMetaStore(dataDir)
+	if err != nil {
+		t.Fatalf("NewMetaStore reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = metaStore.Close() })
+
+	idx = &UTXOIndexer{metaStore: metaStore}
+	progress, ok, err := idx.GetTxIDAliasBackfillProgress()
+	if err != nil {
+		t.Fatalf("GetTxIDAliasBackfillProgress: %v", err)
+	}
+	if !ok || progress != 42 {
+		t.Fatalf("progress = (%d, %v), want (42, true)", progress, ok)
+	}
+	completeHeight, ok, err := idx.GetTxIDAliasBackfillCompleteHeight()
+	if err != nil {
+		t.Fatalf("GetTxIDAliasBackfillCompleteHeight: %v", err)
+	}
+	if !ok || completeHeight != 42 {
+		t.Fatalf("complete height = (%d, %v), want (42, true)", completeHeight, ok)
+	}
+}
