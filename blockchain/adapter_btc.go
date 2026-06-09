@@ -18,6 +18,7 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	"github.com/metaid/utxo_indexer/common"
 	"github.com/metaid/utxo_indexer/config"
+	"github.com/metaid/utxo_indexer/diagnostics"
 	"github.com/metaid/utxo_indexer/indexer"
 )
 
@@ -121,6 +122,13 @@ func (a *BTCAdapter) GetBlock(height int64) (*indexer.Block, error) {
 		return nil, fmt.Errorf("failed to get block verbose1 at height %d: %w", height, err)
 	}
 	getVerbose1Time := time.Since(t2)
+	log.Print(diagnostics.FormatCheckpoint(diagnostics.Checkpoint{
+		Height:    int(height),
+		Phase:     "btc_after_verbose1",
+		TxCount:   len(verbose1.Tx),
+		ElapsedMS: getVerbose1Time.Milliseconds(),
+		Snapshot:  diagnostics.CaptureSnapshot(memoryCheckpointCgroupRoot()),
+	}))
 
 	// 3. 根据区块大小决定处理路径
 	threshold := config.GlobalConfig.LargeBlockThresholdBytes
@@ -136,6 +144,13 @@ func (a *BTCAdapter) GetBlock(height int64) (*indexer.Block, error) {
 		if err != nil {
 			return nil, fmt.Errorf("large block tx-by-tx fetch failed at height %d: %w", height, err)
 		}
+		log.Print(diagnostics.FormatCheckpoint(diagnostics.Checkpoint{
+			Height:    int(height),
+			Phase:     "btc_after_tx_by_tx",
+			TxCount:   len(result.Transactions),
+			ElapsedMS: time.Since(t2).Milliseconds(),
+			Snapshot:  diagnostics.CaptureSnapshot(memoryCheckpointCgroupRoot()),
+		}))
 		log.Printf("[LargeBlock] Height %d: completed tx-by-tx fetch in %.2fs", height, time.Since(t2).Seconds())
 		return result, nil
 	}
@@ -168,11 +183,21 @@ func (a *BTCAdapter) GetBlock(height int64) (*indexer.Block, error) {
 		return nil, err
 	}
 	deserializeTime := time.Since(t4)
+	log.Print(diagnostics.FormatCheckpoint(diagnostics.Checkpoint{
+		Height:    int(height),
+		Phase:     "btc_after_decode",
+		TxCount:   len(msgBlock.Transactions),
+		ElapsedMS: deserializeTime.Milliseconds(),
+		Snapshot:  diagnostics.CaptureSnapshot(memoryCheckpointCgroupRoot()),
+	}))
 
 	// 5. 转换为统一的索引器格式
 	t5 := time.Now()
 	result, err := a.convertToIndexerBlock(msgBlock, int(height), hashStr, msgBlock.Header.Timestamp.Unix())
 	convertTime := time.Since(t5)
+	blockHex = ""
+	blockBytes = nil
+	msgBlock = nil
 
 	// 只在RPC总耗时超过0.2秒时打印警告
 	totalRpcTime := getHashTime + getVerbose1Time + getRawBlockTime + deserializeTime + convertTime

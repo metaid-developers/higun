@@ -28,6 +28,7 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	"github.com/metaid/utxo_indexer/common"
 	"github.com/metaid/utxo_indexer/config"
+	"github.com/metaid/utxo_indexer/diagnostics"
 	"github.com/metaid/utxo_indexer/indexer"
 
 	"github.com/metaid/utxo_indexer/syslogs"
@@ -51,6 +52,13 @@ func (c *Client) SetTxIDAliasResolver(resolver TxIDAliasResolver) {
 		return
 	}
 	c.txIDAliasResolver = resolver
+}
+
+func memoryCheckpointCgroupRoot() string {
+	if config.GlobalConfig == nil {
+		return ""
+	}
+	return config.GlobalConfig.MemoryBudget.CgroupRoot
 }
 
 // GetBlockByHeight wraps adapter's GetBlock for indexer warmup
@@ -959,6 +967,7 @@ func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight
 	// Use adapter to get block data (unified format)
 	if c.adapter != nil {
 		// 新的适配器模式
+		fetchStart := time.Now()
 		allBlock, err := c.adapter.GetBlock(int64(height))
 		if err != nil {
 			errMsg := syslogs.ErrLog{
@@ -971,6 +980,13 @@ func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight
 			log.Printf("Failed to get block via adapter, height %d: %v", height, err)
 			return err
 		}
+		log.Print(diagnostics.FormatCheckpoint(diagnostics.Checkpoint{
+			Height:    height,
+			Phase:     "after_block_fetch",
+			TxCount:   len(allBlock.Transactions),
+			ElapsedMS: time.Since(fetchStart).Milliseconds(),
+			Snapshot:  diagnostics.CaptureSnapshot(memoryCheckpointCgroupRoot()),
+		}))
 
 		// 批处理交易
 		txCount := len(allBlock.Transactions)
@@ -993,9 +1009,11 @@ func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight
 				AddressIncome:  make(map[string][]*indexer.Income),
 				IsPartialBlock: endIdx != txCount,
 			}
+			batchTxCount := len(blockPart.Transactions)
 
 			// 索引当前批次
-			_, _, _, err := idx.IndexBlock(blockPart, allBlock, updateHeight, blockTimeStr, reindex)
+			indexStart := time.Now()
+			inCnt, outCnt, _, err := idx.IndexBlock(blockPart, allBlock, updateHeight, blockTimeStr, reindex)
 			if err != nil {
 				errMsg := syslogs.ErrLog{
 					Height:       height,
@@ -1007,6 +1025,15 @@ func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight
 				syslogs.InsertErrLog(errMsg)
 				return fmt.Errorf("index block failed, height %d: %w", height, err)
 			}
+			log.Print(diagnostics.FormatCheckpoint(diagnostics.Checkpoint{
+				Height:      height,
+				Phase:       "after_index_batch",
+				TxCount:     batchTxCount,
+				InputCount:  inCnt,
+				OutputCount: outCnt,
+				ElapsedMS:   time.Since(indexStart).Milliseconds(),
+				Snapshot:    diagnostics.CaptureSnapshot(memoryCheckpointCgroupRoot()),
+			}))
 
 			// 释放内存
 			blockPart.Transactions = nil
