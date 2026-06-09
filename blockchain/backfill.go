@@ -49,6 +49,9 @@ func (c *Client) BackfillMVCTxIDAliases(idx *indexer.UTXOIndexer, stopCh <-chan 
 	if progressOK {
 		startHeight = progressHeight + 1
 	}
+	if c.cfg.MVCTxIDAliasBackfillStartHeight > startHeight {
+		startHeight = c.cfg.MVCTxIDAliasBackfillStartHeight
+	}
 	if startHeight > targetHeight {
 		if err := idx.MarkTxIDAliasBackfillComplete(targetHeight); err != nil {
 			return fmt.Errorf("mark txid alias backfill complete: %w", err)

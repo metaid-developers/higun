@@ -49,6 +49,38 @@ func TestBackfillMVCTxIDAliasesResumesFromProgress(t *testing.T) {
 	}
 }
 
+func TestBackfillMVCTxIDAliasesHonorsConfiguredStartHeight(t *testing.T) {
+	metaStore := newBackfillTestMetaStore(t)
+	idx := newBackfillTestIndexer(t, metaStore)
+	setBackfillTestLastIndexedHeight(t, metaStore, 150001)
+	if err := idx.SetTxIDAliasBackfillProgress(125078); err != nil {
+		t.Fatalf("SetTxIDAliasBackfillProgress: %v", err)
+	}
+
+	adapter := &recordingBackfillAdapter{blocks: map[int64]*indexer.Block{
+		150000: newBackfillAliasBlock(150000, strings.Repeat("a", 64), strings.Repeat("b", 64)),
+		150001: newBackfillAliasBlock(150001, strings.Repeat("c", 64), strings.Repeat("d", 64)),
+	}}
+	client := &Client{cfg: &config.Config{
+		Chain:                           config.ChainMVC,
+		MVCTxIDAliasBackfillStartHeight: 150000,
+	}, adapter: adapter}
+
+	if err := client.BackfillMVCTxIDAliases(idx, nil); err != nil {
+		t.Fatalf("BackfillMVCTxIDAliases: %v", err)
+	}
+	if !reflect.DeepEqual(adapter.calls, []int64{150000, 150001}) {
+		t.Fatalf("GetBlock calls = %v, want [150000 150001]", adapter.calls)
+	}
+	progress, ok, err := idx.GetTxIDAliasBackfillProgress()
+	if err != nil {
+		t.Fatalf("GetTxIDAliasBackfillProgress: %v", err)
+	}
+	if !ok || progress != 150001 {
+		t.Fatalf("progress = (%d, %v), want (150001, true)", progress, ok)
+	}
+}
+
 func TestBackfillMVCTxIDAliasesSkipsNonMVCAndMissingAdapter(t *testing.T) {
 	t.Run("btc chain", func(t *testing.T) {
 		metaStore := newBackfillTestMetaStore(t)

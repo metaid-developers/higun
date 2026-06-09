@@ -79,6 +79,7 @@ type Config struct {
 	// 大区块逐TX拉取时的并发 goroutine 数，默认 20
 	LargeBlockFetchWorkers            int                 `yaml:"large_block_fetch_workers"`
 	MVCTxIDAliasBackfillEnabled       bool                `yaml:"mvc_txid_alias_backfill_enabled"`
+	MVCTxIDAliasBackfillStartHeight   int                 `yaml:"mvc_txid_alias_backfill_start_height"`
 	MVCTxIDAliasBackfillBatchSize     int                 `yaml:"mvc_txid_alias_backfill_batch_size"`
 	MVCTxIDAliasBackfillWorkers       int                 `yaml:"mvc_txid_alias_backfill_workers"`
 	MVCTxIDAliasBackfillRetryAttempts int                 `yaml:"mvc_txid_alias_backfill_retry_attempts"`
@@ -166,6 +167,7 @@ func LoadConfig(path string) (*Config, error) {
 		LargeBlockThresholdBytes:          200 * 1024 * 1024, // 200MB，超过此值改用逐TX拉取
 		LargeBlockFetchWorkers:            20,                // 大块逐TX拉取并发数
 		MVCTxIDAliasBackfillEnabled:       true,
+		MVCTxIDAliasBackfillStartHeight:   0,
 		MVCTxIDAliasBackfillBatchSize:     1000,
 		MVCTxIDAliasBackfillWorkers:       4,
 		MVCTxIDAliasBackfillRetryAttempts: 3,

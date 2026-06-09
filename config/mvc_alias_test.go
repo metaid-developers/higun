@@ -22,6 +22,9 @@ func TestMVCTxIDAliasBackfillDefaultsEnabled(t *testing.T) {
 	if cfg.MVCTxIDAliasBackfillWorkers != 4 {
 		t.Fatalf("default MVC txid alias backfill workers = %d, want 4", cfg.MVCTxIDAliasBackfillWorkers)
 	}
+	if cfg.MVCTxIDAliasBackfillStartHeight != 0 {
+		t.Fatalf("default MVC txid alias backfill start height = %d, want 0", cfg.MVCTxIDAliasBackfillStartHeight)
+	}
 	if cfg.MVCTxIDAliasBackfillRetryAttempts != 3 {
 		t.Fatalf("default MVC txid alias backfill retry attempts = %d, want 3", cfg.MVCTxIDAliasBackfillRetryAttempts)
 	}
@@ -42,5 +45,18 @@ func TestMVCTxIDAliasBackfillCanBeDisabledByYAML(t *testing.T) {
 
 	if cfg.MVCTxIDAliasBackfillEnabled {
 		t.Fatalf("expected YAML to disable MVC txid alias backfill")
+	}
+}
+
+func TestMVCTxIDAliasBackfillStartHeightFromYAML(t *testing.T) {
+	cfg := Config{}
+
+	data := []byte("mvc_txid_alias_backfill_start_height: 150000\n")
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+
+	if cfg.MVCTxIDAliasBackfillStartHeight != 150000 {
+		t.Fatalf("MVC txid alias backfill start height = %d, want 150000", cfg.MVCTxIDAliasBackfillStartHeight)
 	}
 }
