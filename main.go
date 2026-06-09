@@ -294,17 +294,28 @@ func initConfig() (cfg *config.Config, params config.IndexerParams) {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
+	if cfg.MemoryBudget.ForceCgroupLimitBytes <= 0 && cfg.MemoryBudget.UseCgroupLimit {
+		cfg.MemoryBudget.ForceCgroupLimitBytes = config.DetectCgroupLimitBytes(cfg.MemoryBudget.CgroupRoot)
+	}
+	budget := config.ChooseMemoryBudget(cfg.MemoryGB, cfg.MemoryBudget)
+	config.ApplyGoMemoryLimit(budget)
+
 	syslogs.InitIndexerLogDB(cfg.DataDir + "/higun.db")
 	config.GlobalConfig = cfg
 	config.GlobalNetwork, _ = cfg.GetChainParams()
 
 	// Create auto configuration
+	effectiveMemoryGB := int(budget.EffectiveMemoryBytes >> 30)
+	if effectiveMemoryGB < 1 {
+		effectiveMemoryGB = 1
+	}
 	params = config.AutoConfigure(config.SystemResources{
 		CPUCores:   cfg.CPUCores,
-		MemoryGB:   cfg.MemoryGB,
+		MemoryGB:   effectiveMemoryGB,
 		HighPerf:   cfg.HighPerf,
 		ShardCount: cfg.ShardCount,
 	})
+	params.MemoryBudget = budget
 	params.MaxTxPerBatch = config.GlobalConfig.MaxTxPerBatch
 
 	return
