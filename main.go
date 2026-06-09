@@ -16,6 +16,7 @@ import (
 	"github.com/metaid/utxo_indexer/blockchain"
 	"github.com/metaid/utxo_indexer/common"
 	"github.com/metaid/utxo_indexer/config"
+	"github.com/metaid/utxo_indexer/diagnostics"
 	"github.com/metaid/utxo_indexer/explorer/blockindexer"
 	"github.com/metaid/utxo_indexer/indexer"
 	"github.com/metaid/utxo_indexer/mempool"
@@ -44,6 +45,14 @@ func main() {
 		}
 	}()
 	cfg, params := initConfig()
+	stopDiagnostics, err := diagnostics.StartServer(cfg.Diagnostics, cfg.MemoryBudget.CgroupRoot)
+	if err != nil {
+		log.Fatalf("Failed to start diagnostics server: %v", err)
+	}
+	if stopDiagnostics != nil {
+		defer stopDiagnostics()
+		log.Printf("[Diagnostics] enabled at http://%s/debug/memory", cfg.Diagnostics.Bind)
+	}
 	// block info indexer
 	if cfg.BlockInfoIndexer {
 		startBlockIndexer(cfg)
