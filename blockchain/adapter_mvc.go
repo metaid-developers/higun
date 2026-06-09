@@ -8,7 +8,9 @@ import (
 	"log"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	bsvwire "github.com/bitcoinsv/bsvd/wire"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -244,6 +246,217 @@ func (a *MVCAdapter) getBlockByTxHashes(verbose1 *mvcBlockVerbose1Result, height
 
 	allBlock.Transactions = results
 	return allBlock, nil
+}
+
+// BackfillTxIDAliases stores MVC public txid -> node txid aliases in bounded batches.
+func (a *MVCAdapter) BackfillTxIDAliases(height int64, startOffset int, store func([]*indexer.Transaction) error, markOffset func(int) error, stopCh <-chan struct{}) error {
+	if store == nil {
+		return fmt.Errorf("txid alias store callback is nil")
+	}
+	if markOffset == nil {
+		return fmt.Errorf("txid alias offset callback is nil")
+	}
+
+	hashStr, err := a.GetBlockHash(height)
+	if err != nil {
+		return err
+	}
+	verbose1, err := a.getBlockVerbose1(hashStr)
+	if err != nil {
+		return fmt.Errorf("failed to get block verbose1 at height %d: %w", height, err)
+	}
+
+	txCount := len(verbose1.Tx)
+	if startOffset < 0 {
+		return fmt.Errorf("invalid txid alias start offset: %d", startOffset)
+	}
+	if startOffset > txCount {
+		return fmt.Errorf("txid alias start offset %d exceeds tx count %d", startOffset, txCount)
+	}
+	batchSize, workers, _, _ := mvcTxIDAliasBackfillLimits()
+	if batchSize > txCount && txCount > 0 {
+		batchSize = txCount
+	}
+	if batchSize <= 0 {
+		batchSize = 1
+	}
+	if workers > batchSize {
+		workers = batchSize
+	}
+	if workers <= 0 {
+		workers = 1
+	}
+
+	log.Printf("[TxIDAliasBackfill] MVC height=%d streaming aliases offset=%d txs=%d batch_size=%d workers=%d", height, startOffset, txCount, batchSize, workers)
+	for start := startOffset; start < txCount; start += batchSize {
+		if txIDAliasBackfillStopRequested(stopCh) {
+			return errTxIDAliasBackfillStopped
+		}
+		end := start + batchSize
+		if end > txCount {
+			end = txCount
+		}
+
+		transactions, err := a.fetchMVCTxIDAliasBatch(verbose1.Tx[start:end], workers, stopCh)
+		if err != nil {
+			return err
+		}
+		if err := store(transactions); err != nil {
+			return err
+		}
+		if err := markOffset(end); err != nil {
+			return err
+		}
+
+		transactions = nil
+		if txCount > 400000 {
+			runtime.GC()
+		}
+		if start == 0 || end == txCount || end%100000 == 0 {
+			log.Printf("[TxIDAliasBackfill] MVC height=%d streamed aliases %d/%d", height, end, txCount)
+		}
+	}
+	return nil
+}
+
+func (a *MVCAdapter) fetchMVCTxIDAliasBatch(txids []string, workers int, stopCh <-chan struct{}) ([]*indexer.Transaction, error) {
+	if len(txids) == 0 {
+		return nil, nil
+	}
+	if workers <= 0 {
+		workers = 1
+	}
+	if workers > len(txids) {
+		workers = len(txids)
+	}
+
+	type result struct {
+		idx int
+		tx  *indexer.Transaction
+		err error
+	}
+	results := make([]*indexer.Transaction, len(txids))
+	jobs := make(chan int)
+	resultCh := make(chan result, len(txids))
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				if txIDAliasBackfillStopRequested(stopCh) {
+					resultCh <- result{idx: idx, err: errTxIDAliasBackfillStopped}
+					continue
+				}
+				tx, err := a.getMVCTxIDAliasTransactionWithRetry(txids[idx], stopCh)
+				resultCh <- result{idx: idx, tx: tx, err: err}
+			}
+		}()
+	}
+
+	for i := range txids {
+		if txIDAliasBackfillStopRequested(stopCh) {
+			close(jobs)
+			wg.Wait()
+			close(resultCh)
+			for range resultCh {
+			}
+			return nil, errTxIDAliasBackfillStopped
+		}
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	close(resultCh)
+
+	var firstErr error
+	for item := range resultCh {
+		if item.err != nil && firstErr == nil {
+			firstErr = item.err
+		}
+		results[item.idx] = item.tx
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return results, nil
+}
+
+func (a *MVCAdapter) getMVCTxIDAliasTransactionWithRetry(txid string, stopCh <-chan struct{}) (*indexer.Transaction, error) {
+	_, _, retryAttempts, retryDelay := mvcTxIDAliasBackfillLimits()
+	var tx *indexer.Transaction
+	err := retryTxIDAliasBackfillOperation(retryAttempts, retryDelay, stopCh, func() error {
+		var err error
+		tx, err = a.getMVCTxIDAliasTransaction(txid)
+		return err
+	})
+	return tx, err
+}
+
+func mvcTxIDAliasBackfillLimits() (batchSize int, workers int, retryAttempts int, retryDelay time.Duration) {
+	batchSize = 1000
+	workers = 4
+	retryAttempts = 3
+	retryDelay = time.Second
+	if config.GlobalConfig == nil {
+		return batchSize, workers, retryAttempts, retryDelay
+	}
+	if config.GlobalConfig.MVCTxIDAliasBackfillBatchSize > 0 {
+		batchSize = config.GlobalConfig.MVCTxIDAliasBackfillBatchSize
+	}
+	if config.GlobalConfig.MVCTxIDAliasBackfillWorkers > 0 {
+		workers = config.GlobalConfig.MVCTxIDAliasBackfillWorkers
+	}
+	if config.GlobalConfig.MVCTxIDAliasBackfillRetryAttempts > 0 {
+		retryAttempts = config.GlobalConfig.MVCTxIDAliasBackfillRetryAttempts
+	}
+	if config.GlobalConfig.MVCTxIDAliasBackfillRetryDelayMS >= 0 {
+		retryDelay = time.Duration(config.GlobalConfig.MVCTxIDAliasBackfillRetryDelayMS) * time.Millisecond
+	}
+	return batchSize, workers, retryAttempts, retryDelay
+}
+
+func (a *MVCAdapter) getMVCTxIDAliasTransaction(txid string) (*indexer.Transaction, error) {
+	nodeTxID := strings.ToLower(strings.TrimSpace(txid))
+	txHash, err := chainhash.NewHashFromStr(nodeTxID)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := a.rpcClient.RawRequest("getrawtransaction", []json.RawMessage{
+		json.RawMessage(fmt.Sprintf("\"%s\"", txHash.String())),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var txHex string
+	if err := json.Unmarshal(resp, &txHex); err != nil {
+		return nil, err
+	}
+	txBytes, err := hex.DecodeString(txHex)
+	if err != nil {
+		return nil, err
+	}
+
+	msgTx := &bsvwire.MsgTx{}
+	if err := msgTx.Deserialize(bytes.NewReader(txBytes)); err != nil {
+		return nil, err
+	}
+
+	nodeTxID = strings.ToLower(strings.TrimSpace(msgTx.TxHash().String()))
+	publicTxID, _ := GetNewHash2(msgTx)
+	publicTxID = strings.ToLower(strings.TrimSpace(publicTxID))
+	if publicTxID == "" {
+		publicTxID = nodeTxID
+	}
+
+	nodeAlias := ""
+	if publicTxID != nodeTxID {
+		nodeAlias = nodeTxID
+	}
+	return &indexer.Transaction{ID: publicTxID, NodeID: nodeAlias}, nil
 }
 
 // GetTransaction 获取单笔交易

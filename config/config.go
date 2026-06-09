@@ -77,12 +77,17 @@ type Config struct {
 	// 启用此功能要求节点已开启 txindex=1
 	LargeBlockThresholdBytes int64 `yaml:"large_block_threshold_bytes"`
 	// 大区块逐TX拉取时的并发 goroutine 数，默认 20
-	LargeBlockFetchWorkers          int                 `yaml:"large_block_fetch_workers"`
-	UTXOValidationEnabled           bool                `yaml:"utxo_validation_enabled"`
-	UTXOValidationConcurrency       int                 `yaml:"utxo_validation_concurrency"`
-	UTXOValidationRPCTimeoutSeconds int                 `yaml:"utxo_validation_rpc_timeout_seconds"`
-	RPC                             RPCConfig           `yaml:"rpc"`
-	Wallet                          WalletGatewayConfig `yaml:"wallet"`
+	LargeBlockFetchWorkers            int                 `yaml:"large_block_fetch_workers"`
+	MVCTxIDAliasBackfillEnabled       bool                `yaml:"mvc_txid_alias_backfill_enabled"`
+	MVCTxIDAliasBackfillBatchSize     int                 `yaml:"mvc_txid_alias_backfill_batch_size"`
+	MVCTxIDAliasBackfillWorkers       int                 `yaml:"mvc_txid_alias_backfill_workers"`
+	MVCTxIDAliasBackfillRetryAttempts int                 `yaml:"mvc_txid_alias_backfill_retry_attempts"`
+	MVCTxIDAliasBackfillRetryDelayMS  int                 `yaml:"mvc_txid_alias_backfill_retry_delay_ms"`
+	UTXOValidationEnabled             bool                `yaml:"utxo_validation_enabled"`
+	UTXOValidationConcurrency         int                 `yaml:"utxo_validation_concurrency"`
+	UTXOValidationRPCTimeoutSeconds   int                 `yaml:"utxo_validation_rpc_timeout_seconds"`
+	RPC                               RPCConfig           `yaml:"rpc"`
+	Wallet                            WalletGatewayConfig `yaml:"wallet"`
 }
 
 func (c *Config) GetChainParams() (*chaincfg.Params, error) {
@@ -149,20 +154,25 @@ func LoadConfig(path string) (*Config, error) {
 	flag.Parse()
 	// Default config
 	cfg := &Config{
-		Chain:                           ChainBTC, // 默认 BTC
-		Network:                         "testnet",
-		DataDir:                         "data",
-		BackupDir:                       "data/backups",
-		ShardCount:                      16,
-		APIPort:                         "8080",
-		ZMQAddress:                      []string{"tcp://localhost:28332"},
-		MemPoolCleanStartHeight:         0,                 // 已废弃: 自动判断最新区块时才清理
-		MaxTxPerBatch:                   3000,              // Default: process up to 3000 transactions per batch
-		LargeBlockThresholdBytes:        200 * 1024 * 1024, // 200MB，超过此值改用逐TX拉取
-		LargeBlockFetchWorkers:          20,                // 大块逐TX拉取并发数
-		UTXOValidationEnabled:           true,
-		UTXOValidationConcurrency:       8,
-		UTXOValidationRPCTimeoutSeconds: 3,
+		Chain:                             ChainBTC, // 默认 BTC
+		Network:                           "testnet",
+		DataDir:                           "data",
+		BackupDir:                         "data/backups",
+		ShardCount:                        16,
+		APIPort:                           "8080",
+		ZMQAddress:                        []string{"tcp://localhost:28332"},
+		MemPoolCleanStartHeight:           0,                 // 已废弃: 自动判断最新区块时才清理
+		MaxTxPerBatch:                     3000,              // Default: process up to 3000 transactions per batch
+		LargeBlockThresholdBytes:          200 * 1024 * 1024, // 200MB，超过此值改用逐TX拉取
+		LargeBlockFetchWorkers:            20,                // 大块逐TX拉取并发数
+		MVCTxIDAliasBackfillEnabled:       true,
+		MVCTxIDAliasBackfillBatchSize:     1000,
+		MVCTxIDAliasBackfillWorkers:       4,
+		MVCTxIDAliasBackfillRetryAttempts: 3,
+		MVCTxIDAliasBackfillRetryDelayMS:  1000,
+		UTXOValidationEnabled:             true,
+		UTXOValidationConcurrency:         8,
+		UTXOValidationRPCTimeoutSeconds:   3,
 		RPC: RPCConfig{
 			Chain: ChainBTC, // 默认 BTC
 			Host:  "localhost",

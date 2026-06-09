@@ -92,3 +92,37 @@ func TestTxIDAliasBackfillProgressPersists(t *testing.T) {
 		t.Fatalf("complete height = (%d, %v), want (42, true)", completeHeight, ok)
 	}
 }
+
+func TestTxIDAliasBackfillBlockOffsetPersists(t *testing.T) {
+	dataDir := t.TempDir()
+	metaStore, err := storage.NewMetaStore(dataDir)
+	if err != nil {
+		t.Fatalf("NewMetaStore: %v", err)
+	}
+
+	idx := &UTXOIndexer{metaStore: metaStore}
+	if _, ok, err := idx.GetTxIDAliasBackfillOffset(125079); err != nil || ok {
+		t.Fatalf("initial offset = ok:%v err:%v, want missing without error", ok, err)
+	}
+	if err := idx.SetTxIDAliasBackfillOffset(125079, 3000); err != nil {
+		t.Fatalf("SetTxIDAliasBackfillOffset: %v", err)
+	}
+	if err := metaStore.Close(); err != nil {
+		t.Fatalf("Close first metaStore: %v", err)
+	}
+
+	metaStore, err = storage.NewMetaStore(dataDir)
+	if err != nil {
+		t.Fatalf("NewMetaStore reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = metaStore.Close() })
+
+	idx = &UTXOIndexer{metaStore: metaStore}
+	offset, ok, err := idx.GetTxIDAliasBackfillOffset(125079)
+	if err != nil {
+		t.Fatalf("GetTxIDAliasBackfillOffset: %v", err)
+	}
+	if !ok || offset != 3000 {
+		t.Fatalf("offset = (%d, %v), want (3000, true)", offset, ok)
+	}
+}

@@ -13,6 +13,7 @@ const (
 	txIDAliasMetaPrefix                    = "tx_alias:"
 	txIDAliasBackfillProgressMetaKey       = "tx_alias_backfill:mvc:last_height"
 	txIDAliasBackfillCompleteHeightMetaKey = "tx_alias_backfill:mvc:complete_height"
+	txIDAliasBackfillOffsetMetaPrefix      = "tx_alias_backfill:mvc:offset:"
 )
 
 func txIDAliasMetaKey(txid string) string {
@@ -78,6 +79,27 @@ func (i *UTXOIndexer) GetTxIDAliasBackfillCompleteHeight() (int, bool, error) {
 
 func (i *UTXOIndexer) MarkTxIDAliasBackfillComplete(height int) error {
 	return i.setTxIDAliasBackfillHeight(txIDAliasBackfillCompleteHeightMetaKey, height)
+}
+
+func (i *UTXOIndexer) GetTxIDAliasBackfillOffset(height int) (int, bool, error) {
+	if height < 0 {
+		return 0, false, fmt.Errorf("invalid txid alias backfill height: %d", height)
+	}
+	return i.getTxIDAliasBackfillHeight(txIDAliasBackfillOffsetMetaKey(height))
+}
+
+func (i *UTXOIndexer) SetTxIDAliasBackfillOffset(height int, offset int) error {
+	if height < 0 {
+		return fmt.Errorf("invalid txid alias backfill height: %d", height)
+	}
+	if offset < 0 {
+		return fmt.Errorf("invalid txid alias backfill offset: %d", offset)
+	}
+	return i.setTxIDAliasBackfillHeight(txIDAliasBackfillOffsetMetaKey(height), offset)
+}
+
+func txIDAliasBackfillOffsetMetaKey(height int) string {
+	return txIDAliasBackfillOffsetMetaPrefix + strconv.Itoa(height)
 }
 
 func (i *UTXOIndexer) getTxIDAliasBackfillHeight(key string) (int, bool, error) {

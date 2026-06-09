@@ -1,6 +1,7 @@
 package blockchain
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -136,6 +137,124 @@ func TestBackfillMVCTxIDAliasesStoresAliasForTxDetail(t *testing.T) {
 	}
 }
 
+func TestBackfillMVCTxIDAliasesUsesStreamingAdapterWithoutLoadingWholeBlock(t *testing.T) {
+	metaStore := newBackfillTestMetaStore(t)
+	idx := newBackfillTestIndexer(t, metaStore)
+	setBackfillTestLastIndexedHeight(t, metaStore, 1)
+
+	firstPublicTxID := strings.Repeat("a", 64)
+	firstNodeTxID := strings.Repeat("b", 64)
+	secondPublicTxID := strings.Repeat("c", 64)
+	secondNodeTxID := strings.Repeat("d", 64)
+	adapter := &streamingBackfillAdapter{
+		recordingBackfillAdapter: recordingBackfillAdapter{blocks: map[int64]*indexer.Block{}},
+		batches: map[int64][][]*indexer.Transaction{
+			0: {
+				{{ID: firstPublicTxID, NodeID: firstNodeTxID}},
+			},
+			1: {
+				{{ID: secondPublicTxID, NodeID: secondNodeTxID}},
+			},
+		},
+	}
+	client := &Client{cfg: &config.Config{Chain: config.ChainMVC}, adapter: adapter}
+
+	if err := client.BackfillMVCTxIDAliases(idx, nil); err != nil {
+		t.Fatalf("BackfillMVCTxIDAliases: %v", err)
+	}
+	if len(adapter.calls) != 0 {
+		t.Fatalf("GetBlock calls = %v, want no whole-block loads", adapter.calls)
+	}
+	if !reflect.DeepEqual(adapter.streamCalls, []int64{0, 1}) {
+		t.Fatalf("stream calls = %v, want [0 1]", adapter.streamCalls)
+	}
+	resolved, ok, err := idx.ResolveTxIDAlias(secondPublicTxID)
+	if err != nil {
+		t.Fatalf("ResolveTxIDAlias: %v", err)
+	}
+	if !ok || resolved != secondNodeTxID {
+		t.Fatalf("ResolveTxIDAlias = (%s, %v), want (%s, true)", resolved, ok, secondNodeTxID)
+	}
+}
+
+func TestBackfillMVCTxIDAliasesResumesStreamingBlockFromOffset(t *testing.T) {
+	metaStore := newBackfillTestMetaStore(t)
+	idx := newBackfillTestIndexer(t, metaStore)
+	setBackfillTestLastIndexedHeight(t, metaStore, 125079)
+	if err := idx.SetTxIDAliasBackfillProgress(125078); err != nil {
+		t.Fatalf("SetTxIDAliasBackfillProgress: %v", err)
+	}
+	if err := idx.SetTxIDAliasBackfillOffset(125079, 3000); err != nil {
+		t.Fatalf("SetTxIDAliasBackfillOffset: %v", err)
+	}
+
+	publicTxID := strings.Repeat("e", 64)
+	nodeTxID := strings.Repeat("f", 64)
+	adapter := &streamingBackfillAdapter{
+		recordingBackfillAdapter: recordingBackfillAdapter{blocks: map[int64]*indexer.Block{}},
+		batches: map[int64][][]*indexer.Transaction{
+			125079: {
+				{{ID: publicTxID, NodeID: nodeTxID}},
+			},
+		},
+	}
+	client := &Client{cfg: &config.Config{Chain: config.ChainMVC}, adapter: adapter}
+
+	if err := client.BackfillMVCTxIDAliases(idx, nil); err != nil {
+		t.Fatalf("BackfillMVCTxIDAliases: %v", err)
+	}
+	if got := adapter.startOffsets[125079]; got != 3000 {
+		t.Fatalf("streaming start offset = %d, want 3000", got)
+	}
+	offset, ok, err := idx.GetTxIDAliasBackfillOffset(125079)
+	if err != nil {
+		t.Fatalf("GetTxIDAliasBackfillOffset: %v", err)
+	}
+	if !ok || offset != 3001 {
+		t.Fatalf("offset = (%d, %v), want (3001, true)", offset, ok)
+	}
+	progress, ok, err := idx.GetTxIDAliasBackfillProgress()
+	if err != nil {
+		t.Fatalf("GetTxIDAliasBackfillProgress: %v", err)
+	}
+	if !ok || progress != 125079 {
+		t.Fatalf("progress = (%d, %v), want (125079, true)", progress, ok)
+	}
+}
+
+func TestTxIDAliasBackfillRetryRetriesTransientFailure(t *testing.T) {
+	attempts := 0
+	err := retryTxIDAliasBackfillOperation(3, 0, nil, func() error {
+		attempts++
+		if attempts < 3 {
+			return errors.New("temporary rpc failure")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("retryTxIDAliasBackfillOperation: %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts)
+	}
+}
+
+func TestTxIDAliasBackfillRetryStopsBeforeNextAttempt(t *testing.T) {
+	stopCh := make(chan struct{})
+	close(stopCh)
+	attempts := 0
+	err := retryTxIDAliasBackfillOperation(3, 0, stopCh, func() error {
+		attempts++
+		return errors.New("temporary rpc failure")
+	})
+	if !errors.Is(err, errTxIDAliasBackfillStopped) {
+		t.Fatalf("retryTxIDAliasBackfillOperation error = %v, want stopped", err)
+	}
+	if attempts != 0 {
+		t.Fatalf("attempts = %d, want 0", attempts)
+	}
+}
+
 type recordingBackfillAdapter struct {
 	blocks map[int64]*indexer.Block
 	calls  []int64
@@ -170,6 +289,32 @@ func (a *recordingBackfillAdapter) GetRawMempool() ([]string, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 func (a *recordingBackfillAdapter) FindReorgHeight() (int, int) { return 0, 0 }
+
+type streamingBackfillAdapter struct {
+	recordingBackfillAdapter
+	batches      map[int64][][]*indexer.Transaction
+	streamCalls  []int64
+	startOffsets map[int64]int
+}
+
+func (a *streamingBackfillAdapter) BackfillTxIDAliases(height int64, startOffset int, store func([]*indexer.Transaction) error, markOffset func(int) error, stopCh <-chan struct{}) error {
+	if a.startOffsets == nil {
+		a.startOffsets = make(map[int64]int)
+	}
+	a.streamCalls = append(a.streamCalls, height)
+	a.startOffsets[height] = startOffset
+	nextOffset := startOffset
+	for _, batch := range a.batches[height] {
+		if err := store(batch); err != nil {
+			return err
+		}
+		nextOffset += len(batch)
+		if err := markOffset(nextOffset); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func newBackfillAliasBlock(height int, publicTxID, nodeTxID string) *indexer.Block {
 	return &indexer.Block{
