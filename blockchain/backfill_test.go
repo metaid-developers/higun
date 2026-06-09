@@ -254,6 +254,47 @@ func TestBackfillMVCTxIDAliasesResumesStreamingBlockFromOffset(t *testing.T) {
 	}
 }
 
+func TestBackfillMVCTxIDAliasesConfiguredStartHeightIgnoresLowerStreamingOffset(t *testing.T) {
+	metaStore := newBackfillTestMetaStore(t)
+	idx := newBackfillTestIndexer(t, metaStore)
+	setBackfillTestLastIndexedHeight(t, metaStore, 150001)
+	if err := idx.SetTxIDAliasBackfillProgress(125078); err != nil {
+		t.Fatalf("SetTxIDAliasBackfillProgress: %v", err)
+	}
+	if err := idx.SetTxIDAliasBackfillOffset(125079, 3000); err != nil {
+		t.Fatalf("SetTxIDAliasBackfillOffset: %v", err)
+	}
+
+	adapter := &streamingBackfillAdapter{
+		recordingBackfillAdapter: recordingBackfillAdapter{blocks: map[int64]*indexer.Block{}},
+		batches: map[int64][][]*indexer.Transaction{
+			150000: {
+				{{ID: strings.Repeat("a", 64), NodeID: strings.Repeat("b", 64)}},
+			},
+			150001: {
+				{{ID: strings.Repeat("c", 64), NodeID: strings.Repeat("d", 64)}},
+			},
+		},
+	}
+	client := &Client{cfg: &config.Config{
+		Chain:                           config.ChainMVC,
+		MVCTxIDAliasBackfillStartHeight: 150000,
+	}, adapter: adapter}
+
+	if err := client.BackfillMVCTxIDAliases(idx, nil); err != nil {
+		t.Fatalf("BackfillMVCTxIDAliases: %v", err)
+	}
+	if !reflect.DeepEqual(adapter.streamCalls, []int64{150000, 150001}) {
+		t.Fatalf("stream calls = %v, want [150000 150001]", adapter.streamCalls)
+	}
+	if got := adapter.startOffsets[150000]; got != 0 {
+		t.Fatalf("streaming start offset for 150000 = %d, want 0", got)
+	}
+	if _, ok := adapter.startOffsets[125079]; ok {
+		t.Fatalf("unexpected streaming start offset for skipped 125079: %v", adapter.startOffsets[125079])
+	}
+}
+
 func TestTxIDAliasBackfillRetryRetriesTransientFailure(t *testing.T) {
 	attempts := 0
 	err := retryTxIDAliasBackfillOperation(3, 0, nil, func() error {
