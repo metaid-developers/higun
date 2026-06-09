@@ -35,10 +35,11 @@ type IndexerParams struct {
 	WALSizeMB      int // Write-ahead log size per shard (MB)
 
 	// Overall configuration
-	TotalDBCacheMB     int // Total database cache for all shards (MB)
-	TotalMemoryUsageMB int // Estimated total memory usage (MB)
-	MaxTxPerBatch      int // Maximum transactions per shard
-	MemoryBudget       MemoryBudget
+	TotalDBCacheMB       int // Total database cache for all shards (MB)
+	TotalMemoryUsageMB   int // Estimated total memory usage (MB)
+	MaxTxPerBatch        int // Maximum transactions per shard
+	MemoryBudget         MemoryBudget
+	PebbleMainStoreCount int
 }
 
 type MemoryBudget struct {

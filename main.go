@@ -316,6 +316,10 @@ func initConfig() (cfg *config.Config, params config.IndexerParams) {
 		ShardCount: cfg.ShardCount,
 	})
 	params.MemoryBudget = budget
+	if cfg.MemoryBudget.MainStoreCount <= 0 {
+		cfg.MemoryBudget.MainStoreCount = 5
+	}
+	params.PebbleMainStoreCount = cfg.MemoryBudget.MainStoreCount
 	params.MaxTxPerBatch = config.GlobalConfig.MaxTxPerBatch
 
 	return

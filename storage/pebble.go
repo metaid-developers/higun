@@ -228,6 +228,25 @@ const (
 	StoreTypeContractNFTOwnersSpend
 )
 
+func (t StoreType) String() string {
+	switch t {
+	case StoreTypeUTXO:
+		return DBDirUTXO
+	case StoreTypeIncome:
+		return DBDirIncome
+	case StoreTypeSpend:
+		return DBDirSpend
+	case StoreTypeMeta:
+		return DBDirMeta
+	case StoreTypeAddressBalance:
+		return DBDirAddressBalance
+	case StoreTypeBalanceRank:
+		return DBDirBalanceRank
+	default:
+		return fmt.Sprintf("store_type_%d", int(t))
+	}
+}
+
 func NewMetaStore(dataDir string) (*MetaStore, error) {
 	dbPath := filepath.Join(dataDir, "meta")
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
@@ -243,23 +262,75 @@ func NewMetaStore(dataDir string) (*MetaStore, error) {
 // Configure database options
 
 const (
-	defaultPebbleMemTableSizeBytes                 = 32 << 20 // 32MB per shard
-	defaultPebbleCacheSizeBytes              int64 = 10 << 20 // 10MB per shard
-	defaultPebbleMemTableStopWritesThreshold       = 2
-	defaultPebbleMaxConcurrentCompactions          = 4
-	defaultPebbleMaxOpenFiles                      = 5000
+	defaultPebbleMemTableSizeBytes                  = 32 << 20 // 32MB per shard
+	defaultPebbleCacheSizeBytes              int64  = 10 << 20 // 10MB per shard
+	minPebbleCacheBytes                      int64  = 4 << 20
+	minPebbleMemTableBytes                   uint64 = 4 << 20
+	defaultPebbleMemTableStopWritesThreshold        = 2
+	defaultPebbleMaxConcurrentCompactions           = 4
+	defaultPebbleMaxOpenFiles                       = 5000
 )
 
+func ComputePebbleOpenOptions(params config.IndexerParams, shardCount int) PebbleOpenOptions {
+	if params.MemoryBudget.PebbleCacheBytes == 0 && params.MemoryBudget.PebbleMemTableBytes == 0 {
+		return PebbleOpenOptions{
+			CacheSizeBytes:              defaultPebbleCacheSizeBytes,
+			MemTableSizeBytes:           defaultPebbleMemTableSizeBytes,
+			MemTableStopWritesThreshold: defaultPebbleMemTableStopWritesThreshold,
+			MaxConcurrentCompactions:    defaultPebbleMaxConcurrentCompactions,
+			MaxOpenFiles:                defaultPebbleMaxOpenFiles,
+		}
+	}
+
+	storeCount := params.PebbleMainStoreCount
+	if storeCount <= 0 {
+		storeCount = 1
+	}
+	if shardCount <= 0 {
+		shardCount = 1
+	}
+
+	cacheBytes := params.MemoryBudget.PebbleCacheBytes / int64(storeCount)
+	if cacheBytes < minPebbleCacheBytes {
+		cacheBytes = minPebbleCacheBytes
+	}
+
+	memTableBudget := params.MemoryBudget.PebbleMemTableBytes / (int64(storeCount) * int64(shardCount))
+	if memTableBudget < int64(minPebbleMemTableBytes) {
+		memTableBudget = int64(minPebbleMemTableBytes)
+	}
+
+	return PebbleOpenOptions{
+		CacheSizeBytes:              cacheBytes,
+		MemTableSizeBytes:           uint64(memTableBudget),
+		MemTableStopWritesThreshold: defaultPebbleMemTableStopWritesThreshold,
+		MaxConcurrentCompactions:    defaultPebbleMaxConcurrentCompactions,
+		MaxOpenFiles:                defaultPebbleMaxOpenFiles,
+	}
+}
+
 func NewPebbleStore(params config.IndexerParams, dataDir string, storeType StoreType, shardCount int) (*PebbleStore, error) {
-	return NewPebbleStoreWithOptions(params, dataDir, storeType, shardCount, PebbleOpenOptions{})
+	return NewPebbleStoreWithOptions(params, dataDir, storeType, shardCount, ComputePebbleOpenOptions(params, shardCount))
 }
 
 func NewPebbleStoreWithOptions(params config.IndexerParams, dataDir string, storeType StoreType, shardCount int, openOpts PebbleOpenOptions) (*PebbleStore, error) {
 	if shardCount <= 0 {
 		shardCount = defaultShardCount
 	}
-	dbOptions, cache := newPebbleDBOptions(params, openOpts)
+	dbOptions, cache := newPebbleDBOptions(params, openOpts, shardCount)
 	defer cache.Unref()
+	log.Printf(
+		"[PebbleBudget] store=%s shards=%d main_store_count=%d cache_total_budget=%d memtable_total_budget=%d cache_per_store=%d memtable_per_shard=%d stop_writes=%d max_batch=%d",
+		storeType.String(),
+		shardCount,
+		params.PebbleMainStoreCount,
+		params.MemoryBudget.PebbleCacheBytes,
+		params.MemoryBudget.PebbleMemTableBytes,
+		dbOptions.Cache.MaxSize(),
+		dbOptions.MemTableSize,
+		dbOptions.MemTableStopWritesThreshold,
+		maxBatchSize,
+	)
 
 	store := &PebbleStore{
 		shards: make([]*pebble.DB, shardCount),
@@ -466,15 +537,20 @@ var dedupMergerFactory = &pebble.Merger{
 	},
 }
 
-func newPebbleDBOptions(_ config.IndexerParams, openOpts PebbleOpenOptions) (*pebble.Options, *pebble.Cache) {
+func newPebbleDBOptions(params config.IndexerParams, openOpts PebbleOpenOptions, shardCount int) (*pebble.Options, *pebble.Cache) {
+	var budgeted PebbleOpenOptions
+	if openOpts.CacheSizeBytes <= 0 || openOpts.MemTableSizeBytes == 0 {
+		budgeted = ComputePebbleOpenOptions(params, shardCount)
+	}
+
 	cacheSizeBytes := openOpts.CacheSizeBytes
 	if cacheSizeBytes <= 0 {
-		cacheSizeBytes = defaultPebbleCacheSizeBytes
+		cacheSizeBytes = budgeted.CacheSizeBytes
 	}
 
 	memTableSizeBytes := openOpts.MemTableSizeBytes
 	if memTableSizeBytes == 0 {
-		memTableSizeBytes = defaultPebbleMemTableSizeBytes
+		memTableSizeBytes = budgeted.MemTableSizeBytes
 	}
 
 	memTableStopWritesThreshold := openOpts.MemTableStopWritesThreshold
