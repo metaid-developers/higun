@@ -1054,9 +1054,24 @@ func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight
 		}
 
 		// 记录日志
+		blockHash := allBlock.BlockHash
+		if allBlock.Transactions != nil {
+			allBlock.Transactions = nil
+		}
+		if config.GlobalConfig == nil || !config.GlobalConfig.BlockFilesEnabled {
+			if allBlock.UtxoData != nil {
+				allBlock.UtxoData = nil
+			}
+			if allBlock.IncomeData != nil {
+				allBlock.IncomeData = nil
+			}
+			if allBlock.SpendData != nil {
+				allBlock.SpendData = nil
+			}
+		}
 		logEntry := syslogs.IndexerLog{
 			Height:         height,
-			BlockHash:      allBlock.BlockHash,
+			BlockHash:      blockHash,
 			TxNum:          int64(txCount),
 			CompletionTime: time.Now().Unix(),
 		}

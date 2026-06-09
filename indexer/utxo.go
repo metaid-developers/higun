@@ -471,7 +471,13 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 }
 func SaveBlockFile(fileType string, allBlock *Block, isPart bool) {
 	// 检查是否启用区块文件归档
-	if !config.GlobalConfig.BlockFilesEnabled {
+	if allBlock == nil || config.GlobalConfig == nil || !config.GlobalConfig.BlockFilesEnabled {
+		return
+	}
+	if fileType == "utxo" && allBlock.UtxoData == nil {
+		return
+	}
+	if fileType == "spend" && allBlock.SpendData == nil {
 		return
 	}
 	if isPart {
