@@ -27,6 +27,27 @@ rpc:
   user: "test"
   password: "test"
 
+diagnostics:
+  enabled: false
+  bind: "127.0.0.1:6060"
+  pprof_enabled: true
+  expvar_enabled: true
+  sample_interval_seconds: 30
+  profile_dir: "data/diagnostics"
+  high_water_profile_percents: [70, 80, 90]
+  memory_log_every_n_blocks: 1
+  memory_checkpoint_min_percent: 0
+
+memory_budget:
+  use_cgroup_limit: true
+  go_memory_limit_percent: 65
+  pebble_cache_percent: 12
+  pebble_memtable_percent: 8
+  reserve_percent: 15
+  main_store_count: 5
+  cgroup_root: "/sys/fs/cgroup"
+  force_cgroup_limit_bytes: 0
+
 wallet:
   enabled: false
   timeout_seconds: 10
