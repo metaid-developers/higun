@@ -23,6 +23,9 @@ func TestPebbleBudgetDividesAcrossStoresAndShards(t *testing.T) {
 	if got.MemTableSizeBytes != 8<<20 {
 		t.Fatalf("MemTableSizeBytes = %d, want %d", got.MemTableSizeBytes, uint64(8<<20))
 	}
+	if got.MaxConcurrentCompactions != 1 {
+		t.Fatalf("MaxConcurrentCompactions = %d, want 1 for budgeted runtime", got.MaxConcurrentCompactions)
+	}
 }
 
 func TestPebbleBudgetHasSafeMinimums(t *testing.T) {

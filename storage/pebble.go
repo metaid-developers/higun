@@ -88,6 +88,12 @@ var (
 	noopLogger = &customLogger{}
 )
 
+const (
+	largeMergeValueLogThresholdBytes = 32 << 20
+	slowBulkMergeCommitThreshold     = 5 * time.Second
+	bulkMergeMaxBatchItems           = 1000
+)
+
 // Custom logger - outputs nothing
 type customLogger struct{}
 
@@ -97,6 +103,7 @@ func (l *customLogger) Errorf(format string, args ...interface{}) {}
 
 type PebbleStore struct {
 	shards      []*pebble.DB
+	storeName   string
 	mu          sync.RWMutex
 	dbGetErrors atomic.Int64
 }
@@ -268,6 +275,7 @@ const (
 	minPebbleMemTableBytes                   uint64 = 4 << 20
 	defaultPebbleMemTableStopWritesThreshold        = 2
 	defaultPebbleMaxConcurrentCompactions           = 4
+	budgetedPebbleMaxConcurrentCompactions          = 1
 	defaultPebbleMaxOpenFiles                       = 5000
 )
 
@@ -304,7 +312,7 @@ func ComputePebbleOpenOptions(params config.IndexerParams, shardCount int) Pebbl
 		CacheSizeBytes:              cacheBytes,
 		MemTableSizeBytes:           uint64(memTableBudget),
 		MemTableStopWritesThreshold: defaultPebbleMemTableStopWritesThreshold,
-		MaxConcurrentCompactions:    defaultPebbleMaxConcurrentCompactions,
+		MaxConcurrentCompactions:    budgetedPebbleMaxConcurrentCompactions,
 		MaxOpenFiles:                defaultPebbleMaxOpenFiles,
 	}
 }
@@ -320,7 +328,7 @@ func NewPebbleStoreWithOptions(params config.IndexerParams, dataDir string, stor
 	dbOptions, cache := newPebbleDBOptions(params, openOpts, shardCount)
 	defer cache.Unref()
 	log.Printf(
-		"[PebbleBudget] store=%s shards=%d main_store_count=%d cache_total_budget=%d memtable_total_budget=%d cache_per_store=%d memtable_per_shard=%d stop_writes=%d max_batch=%d",
+		"[PebbleBudget] store=%s shards=%d main_store_count=%d cache_total_budget=%d memtable_total_budget=%d cache_per_store=%d memtable_per_shard=%d stop_writes=%d max_compactions=%d max_batch=%d",
 		storeType.String(),
 		shardCount,
 		params.PebbleMainStoreCount,
@@ -329,11 +337,13 @@ func NewPebbleStoreWithOptions(params config.IndexerParams, dataDir string, stor
 		dbOptions.Cache.MaxSize(),
 		dbOptions.MemTableSize,
 		dbOptions.MemTableStopWritesThreshold,
+		dbOptions.MaxConcurrentCompactions(),
 		maxBatchSize,
 	)
 
 	store := &PebbleStore{
-		shards: make([]*pebble.DB, shardCount),
+		shards:    make([]*pebble.DB, shardCount),
+		storeName: storeType.String(),
 	}
 
 	for i := 0; i < shardCount; i++ {
@@ -466,7 +476,8 @@ func NewPebbleStoreWithOptions(params config.IndexerParams, dataDir string, stor
 // The merger name is "pebble.concatenate" for backward compatibility with
 // existing databases created with the default Pebble merger.
 type dedupMerger struct {
-	buf []byte
+	buf     []byte
+	keyHash uint64
 }
 
 func (m *dedupMerger) MergeNewer(value []byte) error {
@@ -486,6 +497,8 @@ func (m *dedupMerger) Finish(includesBase bool) ([]byte, io.Closer, error) {
 	if len(m.buf) == 0 {
 		return nil, nil, nil
 	}
+	startedAt := time.Now()
+	inputBytes := len(m.buf)
 	s := string(m.buf)
 	seen := make(map[string]struct{}, 16)
 	ordered := make([]string, 0, 16)
@@ -522,6 +535,16 @@ func (m *dedupMerger) Finish(includesBase bool) ([]byte, io.Closer, error) {
 	}
 
 	result := "," + strings.Join(ordered, ",")
+	if inputBytes >= largeMergeValueLogThresholdBytes {
+		log.Printf(
+			"[PebbleMergeLargeValue] key_hash=%016x input_bytes=%d unique_segments=%d result_bytes=%d elapsed_ms=%d",
+			m.keyHash,
+			inputBytes,
+			len(ordered),
+			len(result),
+			time.Since(startedAt).Milliseconds(),
+		)
+	}
 	return []byte(result), nil, nil
 }
 
@@ -529,7 +552,7 @@ func (m *dedupMerger) Finish(includesBase bool) ([]byte, io.Closer, error) {
 var dedupMergerFactory = &pebble.Merger{
 	Name: "pebble.concatenate",
 	Merge: func(key, value []byte) (pebble.ValueMerger, error) {
-		m := &dedupMerger{}
+		m := &dedupMerger{keyHash: xxhash.Sum64(key)}
 		if len(value) > 0 {
 			m.buf = append(m.buf, value...)
 		}
@@ -1239,8 +1262,9 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 
 	shardCount := len(s.shards)
 	type job struct {
-		key   string
-		value []byte
+		key     string
+		value   []byte
+		keyHash uint64
 	}
 
 	// One channel per shard
@@ -1283,6 +1307,9 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 			batch = db.NewBatch()
 			count := 0
 			processed := 0
+			batchValueBytes := 0
+			maxValueBytes := 0
+			maxValueKeyHash := uint64(0)
 
 			//log.Printf("[Shard %d] worker started", shardIdx)
 
@@ -1311,10 +1338,17 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 
 					count++
 					processed++
+					batchValueBytes += len(job.value)
+					if len(job.value) > maxValueBytes {
+						maxValueBytes = len(job.value)
+						maxValueKeyHash = job.keyHash
+					}
 
 					// 批量提交控制 - 增大批次减少 fsync 次数
-					if count >= 5000 || batch.Len() >= maxBatchSize {
+					if count >= bulkMergeMaxBatchItems || batch.Len() >= maxBatchSize {
 						//log.Printf("[Shard %d] committing batch: count=%d, size=%d", shardIdx, count, batch.Len())
+						batchLen := batch.Len()
+						commitStartedAt := time.Now()
 						if err := batch.Commit(pebble.NoSync); err != nil { // NoSync 减少 fsync 开销
 							//log.Printf("[Shard %d] commit error: %v", shardIdx, err)
 							select {
@@ -1324,8 +1358,25 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 							cancel()
 							return
 						}
+						commitElapsed := time.Since(commitStartedAt)
+						if commitElapsed >= slowBulkMergeCommitThreshold || batchValueBytes >= maxBatchSize {
+							log.Printf(
+								"[PebbleBulkMergeCommit] store=%s shard=%d items=%d value_bytes=%d batch_len=%d max_value_bytes=%d max_value_key_hash=%016x elapsed_ms=%d",
+								s.storeName,
+								shardIdx,
+								count,
+								batchValueBytes,
+								batchLen,
+								maxValueBytes,
+								maxValueKeyHash,
+								commitElapsed.Milliseconds(),
+							)
+						}
 						batch.Reset()
 						count = 0
+						batchValueBytes = 0
+						maxValueBytes = 0
+						maxValueKeyHash = 0
 					}
 				}
 			}
@@ -1333,6 +1384,8 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 			// 最后一批提交
 			if batch.Len() > 0 {
 				//log.Printf("[Shard %d] final commit: size=%d", shardIdx, batch.Len())
+				batchLen := batch.Len()
+				commitStartedAt := time.Now()
 				if err := batch.Commit(pebble.Sync); err != nil {
 					//log.Printf("[Shard %d] final commit error: %v", shardIdx, err)
 					select {
@@ -1341,6 +1394,20 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 					}
 					cancel()
 					return
+				}
+				commitElapsed := time.Since(commitStartedAt)
+				if commitElapsed >= slowBulkMergeCommitThreshold || batchValueBytes >= maxBatchSize {
+					log.Printf(
+						"[PebbleBulkMergeCommit] store=%s shard=%d items=%d value_bytes=%d batch_len=%d max_value_bytes=%d max_value_key_hash=%016x elapsed_ms=%d final=true",
+						s.storeName,
+						shardIdx,
+						count,
+						batchValueBytes,
+						batchLen,
+						maxValueBytes,
+						maxValueKeyHash,
+						commitElapsed.Milliseconds(),
+					)
 				}
 			}
 
@@ -1361,9 +1428,10 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 
 		shardIdx := s.getShardIndex(key)
 		valueBytes := []byte("," + strings.Join(values, ","))
+		keyHash := xxhash.Sum64String(key)
 
 		select {
-		case shardChans[shardIdx] <- job{key: key, value: valueBytes}:
+		case shardChans[shardIdx] <- job{key: key, value: valueBytes, keyHash: keyHash}:
 			taskCount++
 		case <-ctx.Done():
 			//log.Printf("[Main] context canceled, distributed %d/%d tasks", taskCount, len(*data))

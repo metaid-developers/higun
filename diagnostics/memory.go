@@ -78,6 +78,93 @@ func CaptureSnapshot(cgroupRoot string) Snapshot {
 }
 
 func readCgroupMemory(root string) (CgroupSnapshot, error) {
+	return readCgroupMemoryWithProc(root, "/proc/self/cgroup")
+}
+
+func readCgroupMemoryWithProc(root, procCgroupPath string) (CgroupSnapshot, error) {
+	var firstErr error
+	for _, candidate := range cgroupMemoryCandidates(root, procCgroupPath) {
+		snapshot, err := readCgroupMemoryDir(candidate)
+		if err == nil {
+			return snapshot, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	if firstErr != nil {
+		return CgroupSnapshot{}, firstErr
+	}
+	return CgroupSnapshot{}, fmt.Errorf("cgroup memory usage not found under %s", root)
+}
+
+func cgroupMemoryCandidates(root, procCgroupPath string) []string {
+	if root == "" {
+		root = "/sys/fs/cgroup"
+	}
+
+	var candidates []string
+	addCandidate := func(path string) {
+		if path == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if existing == path {
+				return
+			}
+		}
+		candidates = append(candidates, path)
+	}
+
+	addCandidate(root)
+	addCandidate(filepath.Join(root, "memory"))
+
+	if data, err := os.ReadFile(procCgroupPath); err == nil {
+		v1MemoryPath, v2Path := parseProcSelfCgroup(data)
+		if v1MemoryPath != "" {
+			rel := strings.TrimPrefix(v1MemoryPath, "/")
+			if rel == "" {
+				addCandidate(filepath.Join(root, "memory"))
+			} else {
+				addCandidate(filepath.Join(root, "memory", rel))
+				addCandidate(filepath.Join(root, rel))
+			}
+		}
+		if v2Path != "" {
+			rel := strings.TrimPrefix(v2Path, "/")
+			if rel == "" {
+				addCandidate(root)
+			} else {
+				addCandidate(filepath.Join(root, rel))
+			}
+		}
+	}
+
+	return candidates
+}
+
+func parseProcSelfCgroup(data []byte) (v1MemoryPath string, v2Path string) {
+	for _, line := range strings.Split(string(data), "\n") {
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		controllers := strings.Split(parts[1], ",")
+		if parts[0] == "0" && parts[1] == "" {
+			v2Path = parts[2]
+			continue
+		}
+		for _, controller := range controllers {
+			if controller == "memory" {
+				v1MemoryPath = parts[2]
+				break
+			}
+		}
+	}
+	return v1MemoryPath, v2Path
+}
+
+func readCgroupMemoryDir(root string) (CgroupSnapshot, error) {
 	if currentData, currentErr := os.ReadFile(filepath.Join(root, "memory.current")); currentErr == nil {
 		maxData, err := os.ReadFile(filepath.Join(root, "memory.max"))
 		if err != nil {

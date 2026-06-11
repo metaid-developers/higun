@@ -92,6 +92,73 @@ func TestReadCgroupMemoryV1(t *testing.T) {
 	}
 }
 
+func TestReadCgroupMemoryV1NestedMemoryController(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "memory"), "memory.usage_in_bytes", "22222\n")
+	writeTestFile(t, filepath.Join(root, "memory"), "memory.limit_in_bytes", "33333\n")
+	writeTestFile(t, filepath.Join(root, "memory"), "memory.failcnt", "4\n")
+	writeTestFile(t, filepath.Join(root, "memory"), "memory.stat", "cache 555\nrss 666\n")
+
+	snapshot, err := readCgroupMemory(root)
+	if err != nil {
+		t.Fatalf("readCgroupMemory() error = %v", err)
+	}
+
+	if snapshot.Version != 1 {
+		t.Fatalf("Version = %d, want 1", snapshot.Version)
+	}
+	if snapshot.CurrentBytes != 22222 {
+		t.Fatalf("CurrentBytes = %d, want 22222", snapshot.CurrentBytes)
+	}
+	if snapshot.LimitBytes != 33333 {
+		t.Fatalf("LimitBytes = %d, want 33333", snapshot.LimitBytes)
+	}
+	if snapshot.FailCount != 4 {
+		t.Fatalf("FailCount = %d, want 4", snapshot.FailCount)
+	}
+	if snapshot.FileBytes != 555 {
+		t.Fatalf("FileBytes = %d, want 555", snapshot.FileBytes)
+	}
+	if snapshot.AnonBytes != 666 {
+		t.Fatalf("AnonBytes = %d, want 666", snapshot.AnonBytes)
+	}
+}
+
+func TestReadCgroupMemoryV1DockerControllerPathFromProcCgroup(t *testing.T) {
+	root := t.TempDir()
+	procCgroup := filepath.Join(root, "proc-self-cgroup")
+	writeTestFile(t, root, "proc-self-cgroup", "7:memory:/docker/abc123\n")
+	controllerDir := filepath.Join(root, "memory", "docker", "abc123")
+	writeTestFile(t, controllerDir, "memory.usage_in_bytes", "44444\n")
+	writeTestFile(t, controllerDir, "memory.limit_in_bytes", "55555\n")
+	writeTestFile(t, controllerDir, "memory.failcnt", "6\n")
+	writeTestFile(t, controllerDir, "memory.stat", "cache 777\nrss 888\n")
+
+	snapshot, err := readCgroupMemoryWithProc(root, procCgroup)
+	if err != nil {
+		t.Fatalf("readCgroupMemoryWithProc() error = %v", err)
+	}
+
+	if snapshot.Version != 1 {
+		t.Fatalf("Version = %d, want 1", snapshot.Version)
+	}
+	if snapshot.CurrentBytes != 44444 {
+		t.Fatalf("CurrentBytes = %d, want 44444", snapshot.CurrentBytes)
+	}
+	if snapshot.LimitBytes != 55555 {
+		t.Fatalf("LimitBytes = %d, want 55555", snapshot.LimitBytes)
+	}
+	if snapshot.FailCount != 6 {
+		t.Fatalf("FailCount = %d, want 6", snapshot.FailCount)
+	}
+	if snapshot.FileBytes != 777 {
+		t.Fatalf("FileBytes = %d, want 777", snapshot.FileBytes)
+	}
+	if snapshot.AnonBytes != 888 {
+		t.Fatalf("AnonBytes = %d, want 888", snapshot.AnonBytes)
+	}
+}
+
 func TestReadCgroupMemoryV1UnlimitedLimit(t *testing.T) {
 	root := t.TempDir()
 	writeTestFile(t, root, "memory.usage_in_bytes", "22222\n")
@@ -245,7 +312,11 @@ func TestParseProcStatusMalformedValuesUseZeroDefaults(t *testing.T) {
 
 func writeTestFile(t *testing.T, root, name, content string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0644); err != nil {
+	path := filepath.Join(root, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("write %s: %v", name, err)
 	}
 }
