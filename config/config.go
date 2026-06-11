@@ -91,6 +91,7 @@ type Config struct {
 	MemoryGB                int      `yaml:"memory_gb"`
 	HighPerf                bool     `yaml:"high_perf"`
 	SyncBaseCountEnabled    bool     `yaml:"sync_base_count_enabled"`
+	SyncTouchedBalanceRows  bool     `yaml:"sync_touched_balance_rows"`
 	APIPort                 string   `yaml:"api_port"`
 	ZMQAddress              []string `yaml:"zmq_address"`
 	ZmqReconnectInterval    int      `yaml:"zmq_reconnect_interval"`

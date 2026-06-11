@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/metaid/utxo_indexer/config"
 	"github.com/metaid/utxo_indexer/storage"
 )
 
@@ -382,6 +383,9 @@ func (i *UTXOIndexer) updateConfirmedBalanceIndexes(deltas map[string]confirmedB
 		return nil
 	}
 	if !i.isBalanceIndexReady() {
+		if config.GlobalConfig == nil || !config.GlobalConfig.SyncTouchedBalanceRows {
+			return nil
+		}
 		if err := i.syncTouchedConfirmedBalanceRowsFromHistory(deltas); err != nil {
 			log.Printf("[BalanceIndex] skipping touched confirmed balance row sync after history refresh failure: %v", err)
 		}

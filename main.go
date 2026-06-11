@@ -146,6 +146,9 @@ func main() {
 	}
 	if !balanceIndexReady {
 		log.Println("[BalanceIndex] Automatic bootstrap disabled on startup; /balance will use history fallback and /rich-list remains unavailable until a manual rebuild is performed")
+		if !cfg.SyncTouchedBalanceRows {
+			log.Println("[BalanceIndex] touched balance row sync disabled by config")
+		}
 	}
 	// Get current blockchain height
 	var bestHeight int
