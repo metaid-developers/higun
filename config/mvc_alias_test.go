@@ -31,6 +31,9 @@ func TestMVCTxIDAliasBackfillDefaultsEnabled(t *testing.T) {
 	if cfg.MVCTxIDAliasBackfillRetryDelayMS != 1000 {
 		t.Fatalf("default MVC txid alias backfill retry delay = %d, want 1000", cfg.MVCTxIDAliasBackfillRetryDelayMS)
 	}
+	if cfg.SyncBaseCountEnabled {
+		t.Fatalf("expected sync base count to default disabled")
+	}
 }
 
 func TestMVCTxIDAliasBackfillCanBeDisabledByYAML(t *testing.T) {
@@ -58,5 +61,18 @@ func TestMVCTxIDAliasBackfillStartHeightFromYAML(t *testing.T) {
 
 	if cfg.MVCTxIDAliasBackfillStartHeight != 150000 {
 		t.Fatalf("MVC txid alias backfill start height = %d, want 150000", cfg.MVCTxIDAliasBackfillStartHeight)
+	}
+}
+
+func TestSyncBaseCountCanBeEnabledByYAML(t *testing.T) {
+	cfg := Config{}
+
+	data := []byte("sync_base_count_enabled: true\n")
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+
+	if !cfg.SyncBaseCountEnabled {
+		t.Fatalf("expected YAML to enable sync base count")
 	}
 }

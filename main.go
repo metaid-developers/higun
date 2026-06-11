@@ -193,10 +193,14 @@ func main() {
 	// Interval to check for new blocks
 	checkInterval := 10 * time.Second
 	idx.InitBaseCount()
-	go func() {
-		defer log.Println("SyncBaseCount goroutine exited")
-		idx.SyncBaseCount()
-	}()
+	if config.GlobalConfig.SyncBaseCountEnabled {
+		go func() {
+			defer log.Println("SyncBaseCount goroutine exited")
+			idx.SyncBaseCount()
+		}()
+	} else {
+		log.Println("[SyncBaseCount] disabled by config")
+	}
 	log.Println("Starting block synchronization...")
 	//log.Println("Note: Mempool not automatically started, please use API '/mempool/start' to start mempool after block sync is complete")
 	go bcClient.CheckReorg(idx)
