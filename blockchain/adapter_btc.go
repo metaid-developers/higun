@@ -18,6 +18,7 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	"github.com/metaid/utxo_indexer/common"
 	"github.com/metaid/utxo_indexer/config"
+	"github.com/metaid/utxo_indexer/diagnostics"
 	"github.com/metaid/utxo_indexer/indexer"
 )
 
@@ -121,6 +122,13 @@ func (a *BTCAdapter) GetBlock(height int64) (*indexer.Block, error) {
 		return nil, fmt.Errorf("failed to get block verbose1 at height %d: %w", height, err)
 	}
 	getVerbose1Time := time.Since(t2)
+	log.Print(diagnostics.FormatCheckpoint(diagnostics.Checkpoint{
+		Height:    int(height),
+		Phase:     "btc_after_verbose1",
+		TxCount:   len(verbose1.Tx),
+		ElapsedMS: getVerbose1Time.Milliseconds(),
+		Snapshot:  diagnostics.CaptureSnapshot(memoryCheckpointCgroupRoot()),
+	}))
 
 	// 3. 根据区块大小决定处理路径
 	threshold := config.GlobalConfig.LargeBlockThresholdBytes
@@ -136,6 +144,13 @@ func (a *BTCAdapter) GetBlock(height int64) (*indexer.Block, error) {
 		if err != nil {
 			return nil, fmt.Errorf("large block tx-by-tx fetch failed at height %d: %w", height, err)
 		}
+		log.Print(diagnostics.FormatCheckpoint(diagnostics.Checkpoint{
+			Height:    int(height),
+			Phase:     "btc_after_tx_by_tx",
+			TxCount:   len(result.Transactions),
+			ElapsedMS: time.Since(t2).Milliseconds(),
+			Snapshot:  diagnostics.CaptureSnapshot(memoryCheckpointCgroupRoot()),
+		}))
 		log.Printf("[LargeBlock] Height %d: completed tx-by-tx fetch in %.2fs", height, time.Since(t2).Seconds())
 		return result, nil
 	}
@@ -168,11 +183,28 @@ func (a *BTCAdapter) GetBlock(height int64) (*indexer.Block, error) {
 		return nil, err
 	}
 	deserializeTime := time.Since(t4)
+	log.Print(diagnostics.FormatCheckpoint(diagnostics.Checkpoint{
+		Height:    int(height),
+		Phase:     "btc_after_decode",
+		TxCount:   len(msgBlock.Transactions),
+		ElapsedMS: deserializeTime.Milliseconds(),
+		Snapshot:  diagnostics.CaptureSnapshot(memoryCheckpointCgroupRoot()),
+	}))
 
 	// 5. 转换为统一的索引器格式
 	t5 := time.Now()
 	result, err := a.convertToIndexerBlock(msgBlock, int(height), hashStr, msgBlock.Header.Timestamp.Unix())
 	convertTime := time.Since(t5)
+	if err != nil {
+		return nil, err
+	}
+	blockHex = ""
+	blockBytes = nil
+	msgBlock.Transactions = nil
+	msgBlock = nil
+	if verbose1.Size > threshold/2 {
+		runtime.GC()
+	}
 
 	// 只在RPC总耗时超过0.2秒时打印警告
 	totalRpcTime := getHashTime + getVerbose1Time + getRawBlockTime + deserializeTime + convertTime
@@ -181,7 +213,7 @@ func (a *BTCAdapter) GetBlock(height int64) (*indexer.Block, error) {
 			height, getHashTime.Seconds(), getVerbose1Time.Seconds(), getRawBlockTime.Seconds(), deserializeTime.Seconds(), convertTime.Seconds())
 	}
 
-	return result, err
+	return result, nil
 }
 
 // btcBlockVerbose1Result 是 getblock <hash> 1 的简化响应结构
@@ -224,12 +256,14 @@ func (a *BTCAdapter) getBlockByTxHashes(verbose1 *btcBlockVerbose1Result, height
 	}
 
 	allBlock := &indexer.Block{
-		Height:     height,
-		BlockHash:  verbose1.Hash,
-		BlockTime:  verbose1.Time,
-		UtxoData:   make(map[string][]string),
-		IncomeData: make(map[string][]string),
-		SpendData:  make(map[string][]string),
+		Height:    height,
+		BlockHash: verbose1.Hash,
+		BlockTime: verbose1.Time,
+	}
+	if config.GlobalConfig != nil && config.GlobalConfig.BlockFilesEnabled {
+		allBlock.UtxoData = make(map[string][]string)
+		allBlock.IncomeData = make(map[string][]string)
+		allBlock.SpendData = make(map[string][]string)
 	}
 
 	results := make([]*indexer.Transaction, txCount)
@@ -320,12 +354,14 @@ func (a *BTCAdapter) convertToIndexerBlock(msgBlock *wire.MsgBlock, height int, 
 
 	// 创建完整区块结构
 	allBlock := &indexer.Block{
-		Height:     height,
-		BlockHash:  blockHash,
-		BlockTime:  blockTime,
-		UtxoData:   make(map[string][]string),
-		IncomeData: make(map[string][]string),
-		SpendData:  make(map[string][]string),
+		Height:    height,
+		BlockHash: blockHash,
+		BlockTime: blockTime,
+	}
+	if config.GlobalConfig != nil && config.GlobalConfig.BlockFilesEnabled {
+		allBlock.UtxoData = make(map[string][]string)
+		allBlock.IncomeData = make(map[string][]string)
+		allBlock.SpendData = make(map[string][]string)
 	}
 
 	// 批处理交易

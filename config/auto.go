@@ -2,7 +2,12 @@ package config
 
 import (
 	"log"
+	"os"
+	"path/filepath"
 	"runtime"
+	"runtime/debug"
+	"strconv"
+	"strings"
 )
 
 // SystemResources represents available system resources
@@ -30,9 +35,107 @@ type IndexerParams struct {
 	WALSizeMB      int // Write-ahead log size per shard (MB)
 
 	// Overall configuration
-	TotalDBCacheMB     int // Total database cache for all shards (MB)
-	TotalMemoryUsageMB int // Estimated total memory usage (MB)
-	MaxTxPerBatch      int // Maximum transactions per shard
+	TotalDBCacheMB       int // Total database cache for all shards (MB)
+	TotalMemoryUsageMB   int // Estimated total memory usage (MB)
+	MaxTxPerBatch        int // Maximum transactions per shard
+	MemoryBudget         MemoryBudget
+	PebbleMainStoreCount int
+}
+
+type MemoryBudget struct {
+	ConfiguredMemoryBytes int64
+	CgroupLimitBytes      int64
+	EffectiveMemoryBytes  int64
+	GoMemoryLimitBytes    int64
+	ReserveBytes          int64
+	PebbleCacheBytes      int64
+	PebbleMemTableBytes   int64
+}
+
+func ChooseMemoryBudget(memoryGB int, cfg MemoryBudgetConfig) MemoryBudget {
+	configuredGB := int64(memoryGB)
+	if configuredGB <= 0 {
+		configuredGB = 4
+	}
+	configuredBytes := configuredGB << 30
+	cgroupLimit := cfg.ForceCgroupLimitBytes
+	effective := configuredBytes
+	if cfg.UseCgroupLimit && cgroupLimit > 0 && cgroupLimit < effective {
+		effective = cgroupLimit
+	}
+
+	goPercent := cfg.GoMemoryLimitPercent
+	if goPercent <= 0 {
+		goPercent = 65
+	}
+	reservePercent := cfg.ReservePercent
+	if reservePercent <= 0 {
+		reservePercent = 15
+	}
+	cachePercent := cfg.PebbleCachePercent
+	if cachePercent <= 0 {
+		cachePercent = 12
+	}
+	memTablePercent := cfg.PebbleMemTablePercent
+	if memTablePercent <= 0 {
+		memTablePercent = 8
+	}
+
+	return MemoryBudget{
+		ConfiguredMemoryBytes: configuredBytes,
+		CgroupLimitBytes:      cgroupLimit,
+		EffectiveMemoryBytes:  effective,
+		GoMemoryLimitBytes:    int64(float64(effective) * goPercent / 100),
+		ReserveBytes:          int64(float64(effective) * reservePercent / 100),
+		PebbleCacheBytes:      int64(float64(effective) * cachePercent / 100),
+		PebbleMemTableBytes:   int64(float64(effective) * memTablePercent / 100),
+	}
+}
+
+func ApplyGoMemoryLimit(budget MemoryBudget) {
+	if budget.GoMemoryLimitBytes <= 0 {
+		return
+	}
+	previous := debug.SetMemoryLimit(budget.GoMemoryLimitBytes)
+	log.Printf(
+		"[MemoryBudget] Applied Go memory limit: previous=%d chosen=%d effective=%d configured=%d cgroup=%d reserve=%d",
+		previous,
+		budget.GoMemoryLimitBytes,
+		budget.EffectiveMemoryBytes,
+		budget.ConfiguredMemoryBytes,
+		budget.CgroupLimitBytes,
+		budget.ReserveBytes,
+	)
+}
+
+func DetectCgroupLimitBytes(root string) int64 {
+	if root == "" {
+		root = "/sys/fs/cgroup"
+	}
+
+	if limit := readCgroupLimit(filepath.Join(root, "memory.max")); limit > 0 {
+		return limit
+	}
+	if limit := readCgroupLimit(filepath.Join(root, "memory.limit_in_bytes")); limit > 0 {
+		return limit
+	}
+	return readCgroupLimit(filepath.Join(root, "memory", "memory.limit_in_bytes"))
+}
+
+func readCgroupLimit(path string) int64 {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	value := strings.TrimSpace(string(data))
+	if value == "" || value == "max" {
+		return 0
+	}
+	limit, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || limit <= 0 || limit > 1<<60 {
+		return 0
+	}
+	return limit
 }
 
 // AutoConfigure automatically calculates optimal configuration based on system resources

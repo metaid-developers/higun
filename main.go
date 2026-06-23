@@ -16,6 +16,7 @@ import (
 	"github.com/metaid/utxo_indexer/blockchain"
 	"github.com/metaid/utxo_indexer/common"
 	"github.com/metaid/utxo_indexer/config"
+	"github.com/metaid/utxo_indexer/diagnostics"
 	"github.com/metaid/utxo_indexer/explorer/blockindexer"
 	"github.com/metaid/utxo_indexer/indexer"
 	"github.com/metaid/utxo_indexer/mempool"
@@ -44,6 +45,14 @@ func main() {
 		}
 	}()
 	cfg, params := initConfig()
+	stopDiagnostics, err := diagnostics.StartServer(cfg.Diagnostics, cfg.MemoryBudget.CgroupRoot)
+	if err != nil {
+		log.Fatalf("Failed to start diagnostics server: %v", err)
+	}
+	if stopDiagnostics != nil {
+		defer stopDiagnostics()
+		log.Printf("[Diagnostics] enabled at http://%s/debug/memory", cfg.Diagnostics.Bind)
+	}
 	// block info indexer
 	if cfg.BlockInfoIndexer {
 		startBlockIndexer(cfg)
@@ -137,6 +146,9 @@ func main() {
 	}
 	if !balanceIndexReady {
 		log.Println("[BalanceIndex] Automatic bootstrap disabled on startup; /balance will use history fallback and /rich-list remains unavailable until a manual rebuild is performed")
+		if !cfg.SyncTouchedBalanceRows {
+			log.Println("[BalanceIndex] touched balance row sync disabled by config")
+		}
 	}
 	// Get current blockchain height
 	var bestHeight int
@@ -184,10 +196,14 @@ func main() {
 	// Interval to check for new blocks
 	checkInterval := 10 * time.Second
 	idx.InitBaseCount()
-	go func() {
-		defer log.Println("SyncBaseCount goroutine exited")
-		idx.SyncBaseCount()
-	}()
+	if config.GlobalConfig.SyncBaseCountEnabled {
+		go func() {
+			defer log.Println("SyncBaseCount goroutine exited")
+			idx.SyncBaseCount()
+		}()
+	} else {
+		log.Println("[SyncBaseCount] disabled by config")
+	}
 	log.Println("Starting block synchronization...")
 	//log.Println("Note: Mempool not automatically started, please use API '/mempool/start' to start mempool after block sync is complete")
 	go bcClient.CheckReorg(idx)
@@ -285,17 +301,32 @@ func initConfig() (cfg *config.Config, params config.IndexerParams) {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
+	if cfg.MemoryBudget.ForceCgroupLimitBytes <= 0 && cfg.MemoryBudget.UseCgroupLimit {
+		cfg.MemoryBudget.ForceCgroupLimitBytes = config.DetectCgroupLimitBytes(cfg.MemoryBudget.CgroupRoot)
+	}
+	budget := config.ChooseMemoryBudget(cfg.MemoryGB, cfg.MemoryBudget)
+	config.ApplyGoMemoryLimit(budget)
+
 	syslogs.InitIndexerLogDB(cfg.DataDir + "/higun.db")
 	config.GlobalConfig = cfg
 	config.GlobalNetwork, _ = cfg.GetChainParams()
 
 	// Create auto configuration
+	effectiveMemoryGB := int(budget.EffectiveMemoryBytes >> 30)
+	if effectiveMemoryGB < 1 {
+		effectiveMemoryGB = 1
+	}
 	params = config.AutoConfigure(config.SystemResources{
 		CPUCores:   cfg.CPUCores,
-		MemoryGB:   cfg.MemoryGB,
+		MemoryGB:   effectiveMemoryGB,
 		HighPerf:   cfg.HighPerf,
 		ShardCount: cfg.ShardCount,
 	})
+	params.MemoryBudget = budget
+	if cfg.MemoryBudget.MainStoreCount <= 0 {
+		cfg.MemoryBudget.MainStoreCount = 5
+	}
+	params.PebbleMainStoreCount = cfg.MemoryBudget.MainStoreCount
 	params.MaxTxPerBatch = config.GlobalConfig.MaxTxPerBatch
 
 	return

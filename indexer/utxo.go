@@ -15,6 +15,7 @@ import (
 	"github.com/mattn/go-colorable"
 	"github.com/metaid/utxo_indexer/common"
 	"github.com/metaid/utxo_indexer/config"
+	"github.com/metaid/utxo_indexer/diagnostics"
 	"github.com/metaid/utxo_indexer/storage"
 	"github.com/metaid/utxo_indexer/syslogs"
 	"github.com/schollz/progressbar/v3"
@@ -72,6 +73,14 @@ var workers = 1
 
 var batchSize = 1000
 var CleanedHeight int64 // Used to record cleanup height
+
+func memoryCheckpointCgroupRoot() string {
+	if config.GlobalConfig == nil {
+		return ""
+	}
+	return config.GlobalConfig.MemoryBudget.CgroupRoot
+}
+
 func NewUTXOIndexer(params config.IndexerParams, utxoStore, addressStore *storage.PebbleStore, metaStore *storage.MetaStore, spendStore *storage.PebbleStore) *UTXOIndexer {
 	maxCount := int64(config.GlobalConfig.MemUTXOMaxCount)
 	if maxCount <= 0 {
@@ -244,6 +253,7 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 	if block == nil {
 		return 0, 0, 0, fmt.Errorf("cannot index nil block")
 	}
+	txCount := len(block.Transactions)
 
 	// Set global worker count and batch size
 	workers = config.GlobalConfig.Workers
@@ -279,6 +289,14 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 		addressNum = addressCnt
 	}
 	incomeTime := time.Since(tIncome)
+	log.Print(diagnostics.FormatCheckpoint(diagnostics.Checkpoint{
+		Height:      block.Height,
+		Phase:       "after_income",
+		TxCount:     txCount,
+		OutputCount: outCnt,
+		ElapsedMS:   incomeTime.Milliseconds(),
+		Snapshot:    diagnostics.CaptureSnapshot(memoryCheckpointCgroupRoot()),
+	}))
 	//存储utxo归档文件
 	SaveBlockFile("utxo", allBlock, true)
 	// After phase 1 is complete, some memory can be released
@@ -300,7 +318,17 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 		inCnt = cnt
 	}
 	spendTime := time.Since(tSpend)
+	log.Print(diagnostics.FormatCheckpoint(diagnostics.Checkpoint{
+		Height:      block.Height,
+		Phase:       "after_spend",
+		TxCount:     txCount,
+		InputCount:  inCnt,
+		OutputCount: outCnt,
+		ElapsedMS:   spendTime.Milliseconds(),
+		Snapshot:    diagnostics.CaptureSnapshot(memoryCheckpointCgroupRoot()),
+	}))
 
+	tBalance := time.Now()
 	if err := i.updateConfirmedBalanceIndexes(balanceDeltas, reindex); err != nil {
 		errMsg := syslogs.ErrLog{
 			Height:       block.Height,
@@ -312,6 +340,15 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 		go syslogs.InsertErrLog(errMsg)
 		return 0, 0, 0, fmt.Errorf("failed to update confirmed balance indexes: %w", err)
 	}
+	log.Print(diagnostics.FormatCheckpoint(diagnostics.Checkpoint{
+		Height:      block.Height,
+		Phase:       "after_balance_index",
+		TxCount:     txCount,
+		InputCount:  inCnt,
+		OutputCount: outCnt,
+		ElapsedMS:   time.Since(tBalance).Milliseconds(),
+		Snapshot:    diagnostics.CaptureSnapshot(memoryCheckpointCgroupRoot()),
+	}))
 	// After phase 2 is complete, release transaction data
 	block.Transactions = nil
 
@@ -366,6 +403,15 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 		}
 
 		syncTime := time.Since(tSync)
+		log.Print(diagnostics.FormatCheckpoint(diagnostics.Checkpoint{
+			Height:      block.Height,
+			Phase:       "after_height_update",
+			TxCount:     txCount,
+			InputCount:  inCnt,
+			OutputCount: outCnt,
+			ElapsedMS:   syncTime.Milliseconds(),
+			Snapshot:    diagnostics.CaptureSnapshot(memoryCheckpointCgroupRoot()),
+		}))
 
 		// 定期强制GC和内存统计（每100个区块）
 		if block.Height%100 == 0 {
@@ -406,7 +452,17 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 		// 只在每100个区块强制GC一次，避免频繁GC影响性能
 		if block.Height%100 == 0 {
 			log.Printf("[Memory] Height %d: Forcing GC...", block.Height)
+			gcStart := time.Now()
 			runtime.GC()
+			log.Print(diagnostics.FormatCheckpoint(diagnostics.Checkpoint{
+				Height:      block.Height,
+				Phase:       "after_gc",
+				TxCount:     txCount,
+				InputCount:  inCnt,
+				OutputCount: outCnt,
+				ElapsedMS:   time.Since(gcStart).Milliseconds(),
+				Snapshot:    diagnostics.CaptureSnapshot(memoryCheckpointCgroupRoot()),
+			}))
 		}
 	}
 	// Finally release the block object
@@ -415,7 +471,13 @@ func (i *UTXOIndexer) IndexBlock(block *Block, allBlock *Block, updateHeight boo
 }
 func SaveBlockFile(fileType string, allBlock *Block, isPart bool) {
 	// 检查是否启用区块文件归档
-	if !config.GlobalConfig.BlockFilesEnabled {
+	if allBlock == nil || config.GlobalConfig == nil || !config.GlobalConfig.BlockFilesEnabled {
+		return
+	}
+	if fileType == "utxo" && allBlock.UtxoData == nil {
+		return
+	}
+	if fileType == "spend" && allBlock.SpendData == nil {
 		return
 	}
 	if isPart {

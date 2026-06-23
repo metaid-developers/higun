@@ -47,6 +47,29 @@ type WalletGatewayFeeRateConfig struct {
 	Default string `yaml:"default"`
 }
 
+type DiagnosticsConfig struct {
+	Enabled                    bool    `yaml:"enabled"`
+	Bind                       string  `yaml:"bind"`
+	PprofEnabled               bool    `yaml:"pprof_enabled"`
+	ExpvarEnabled              bool    `yaml:"expvar_enabled"`
+	SampleIntervalSeconds      int     `yaml:"sample_interval_seconds"`
+	ProfileDir                 string  `yaml:"profile_dir"`
+	HighWaterProfilePercents   []int   `yaml:"high_water_profile_percents"`
+	MemoryLogEveryNBlocks      int     `yaml:"memory_log_every_n_blocks"`
+	MemoryCheckpointMinPercent float64 `yaml:"memory_checkpoint_min_percent"`
+}
+
+type MemoryBudgetConfig struct {
+	UseCgroupLimit        bool    `yaml:"use_cgroup_limit"`
+	GoMemoryLimitPercent  float64 `yaml:"go_memory_limit_percent"`
+	PebbleCachePercent    float64 `yaml:"pebble_cache_percent"`
+	PebbleMemTablePercent float64 `yaml:"pebble_memtable_percent"`
+	ReservePercent        float64 `yaml:"reserve_percent"`
+	MainStoreCount        int     `yaml:"main_store_count"`
+	CgroupRoot            string  `yaml:"cgroup_root"`
+	ForceCgroupLimitBytes int64   `yaml:"force_cgroup_limit_bytes"`
+}
+
 var GlobalConfig *Config
 var GlobalNetwork *chaincfg.Params
 
@@ -67,6 +90,8 @@ type Config struct {
 	CPUCores                int      `yaml:"cpu_cores"`
 	MemoryGB                int      `yaml:"memory_gb"`
 	HighPerf                bool     `yaml:"high_perf"`
+	SyncBaseCountEnabled    bool     `yaml:"sync_base_count_enabled"`
+	SyncTouchedBalanceRows  bool     `yaml:"sync_touched_balance_rows"`
 	APIPort                 string   `yaml:"api_port"`
 	ZMQAddress              []string `yaml:"zmq_address"`
 	ZmqReconnectInterval    int      `yaml:"zmq_reconnect_interval"`
@@ -89,6 +114,8 @@ type Config struct {
 	UTXOValidationRPCTimeoutSeconds   int                 `yaml:"utxo_validation_rpc_timeout_seconds"`
 	RPC                               RPCConfig           `yaml:"rpc"`
 	Wallet                            WalletGatewayConfig `yaml:"wallet"`
+	Diagnostics                       DiagnosticsConfig   `yaml:"diagnostics"`
+	MemoryBudget                      MemoryBudgetConfig  `yaml:"memory_budget"`
 }
 
 func (c *Config) GetChainParams() (*chaincfg.Params, error) {
@@ -175,6 +202,26 @@ func LoadConfig(path string) (*Config, error) {
 		UTXOValidationEnabled:             true,
 		UTXOValidationConcurrency:         8,
 		UTXOValidationRPCTimeoutSeconds:   3,
+		Diagnostics: DiagnosticsConfig{
+			Enabled:                    false,
+			Bind:                       "127.0.0.1:6060",
+			PprofEnabled:               true,
+			ExpvarEnabled:              true,
+			SampleIntervalSeconds:      30,
+			ProfileDir:                 "data/diagnostics",
+			HighWaterProfilePercents:   []int{70, 80, 90},
+			MemoryLogEveryNBlocks:      1,
+			MemoryCheckpointMinPercent: 0,
+		},
+		MemoryBudget: MemoryBudgetConfig{
+			UseCgroupLimit:        true,
+			GoMemoryLimitPercent:  65,
+			PebbleCachePercent:    12,
+			PebbleMemTablePercent: 8,
+			ReservePercent:        15,
+			MainStoreCount:        5,
+			CgroupRoot:            "/sys/fs/cgroup",
+		},
 		RPC: RPCConfig{
 			Chain: ChainBTC, // 默认 BTC
 			Host:  "localhost",

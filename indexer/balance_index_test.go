@@ -66,9 +66,10 @@ func newBalanceIndexTestIndexer(t *testing.T) *UTXOIndexer {
 
 	oldGlobalConfig := config.GlobalConfig
 	config.GlobalConfig = &config.Config{
-		MemUTXOMaxCount: 1,
-		BatchSize:       100,
-		Workers:         1,
+		MemUTXOMaxCount:        1,
+		BatchSize:              100,
+		Workers:                1,
+		SyncTouchedBalanceRows: true,
 	}
 	t.Cleanup(func() {
 		config.GlobalConfig = oldGlobalConfig
@@ -709,6 +710,50 @@ func TestIndexBlockMaintainsMaterializedBalanceRowsWhenIndexNotReady(t *testing.
 	}
 	if rowB.BalanceSatoshi != 30 || rowB.UTXOCount != 1 || !rowB.Tracked {
 		t.Fatalf("unexpected addr-b cached row after block2: %+v", rowB)
+	}
+}
+
+func TestIndexBlockSkipsMaterializedBalanceRowsWhenDisabled(t *testing.T) {
+	idx := newBalanceIndexTestIndexer(t)
+	config.GlobalConfig.SyncTouchedBalanceRows = false
+
+	block := &Block{
+		Height:    100,
+		BlockHash: "block-100",
+		Transactions: []*Transaction{
+			{
+				ID:     "tx-100",
+				Inputs: []*Input{},
+				Outputs: []*Output{
+					{Address: "addr-a", Amount: "50"},
+				},
+			},
+		},
+		AddressIncome: make(map[string][]*Income),
+	}
+	allBlock := &Block{
+		Height:     block.Height,
+		BlockHash:  block.BlockHash,
+		UtxoData:   make(map[string][]string),
+		IncomeData: make(map[string][]string),
+		SpendData:  make(map[string][]string),
+	}
+
+	if _, _, _, err := idx.IndexBlock(block, allBlock, false, "1700000000", false); err != nil {
+		t.Fatalf("IndexBlock: %v", err)
+	}
+
+	_, err := idx.getAddressBalanceRow("addr-a")
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("expected no tracked row when touched balance sync is disabled, got %v", err)
+	}
+
+	balance, err := idx.GetBalance("addr-a", 0)
+	if err != nil {
+		t.Fatalf("GetBalance addr-a: %v", err)
+	}
+	if balance.ConfirmedBalanceSatoshi != 50 || balance.UTXOCount != 1 {
+		t.Fatalf("expected balance fallback to remain correct, got %+v", balance)
 	}
 }
 
