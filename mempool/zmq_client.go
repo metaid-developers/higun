@@ -40,8 +40,15 @@ type MessageHandler func(topic string, data []byte) error
 
 // NewZMQClient creates a new ZMQ client
 func NewZMQClient(address []string, _ *storage.SimpleDB) []*ZMQClient {
-	ctx, cancel := context.WithCancel(context.Background())
 	var result []*ZMQClient
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		// With no clients created nothing holds the cancel func, so
+		// release the context instead of leaking it on Background.
+		if len(result) == 0 {
+			cancel()
+		}
+	}()
 	for _, addr := range address {
 		result = append(result, &ZMQClient{
 			address:           addr,
