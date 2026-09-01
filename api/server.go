@@ -31,6 +31,7 @@ type Server struct {
 	startMempoolFn        func() error
 	initializeMempoolFn   func()
 	startMempoolCleanerFn func()
+	rebuildMempoolFn      func() error
 	getTxDetailFn         func(string) (*blockchain.TxDetail, error)
 	walletGatewayEnabled  bool
 }
@@ -228,6 +229,60 @@ func (s *Server) startMempoolCleaner() {
 	}
 }
 
+// restartMempoolCore rebuilds the mempool as a clean restart: stop the old
+// ZMQ clients, wipe and rebuild mempool_income/mempool_spend, start ZMQ
+// listening again and re-ingest the node's current mempool. Unlike
+// StartMempoolCore it does not skip when the mempool is already running, and
+// it never starts a second mempool cleaner goroutine.
+func (s *Server) restartMempoolCore() error {
+	if s.rebuildMempoolFn == nil && (s.mempoolMgr == nil || s.bcClient == nil) {
+		return fmt.Errorf("Mempool manager or blockchain client not configured")
+	}
+
+	// Stop old ZMQ clients, wipe and rebuild the mempool databases, and
+	// create fresh ZMQ clients (not yet listening).
+	rebuildFn := s.rebuildMempoolFn
+	if rebuildFn == nil {
+		rebuildFn = s.mempoolMgr.RebuildMempool
+	}
+	if err := rebuildFn(); err != nil {
+		return fmt.Errorf("Failed to rebuild mempool: %w", err)
+	}
+
+	// Start ZMQ listening with the fresh clients.
+	log.Println("Starting ZMQ and mempool listener via API...")
+	startFn := s.startMempoolFn
+	if startFn == nil {
+		startFn = s.mempoolMgr.Start
+	}
+	if err := startFn(); err != nil {
+		return fmt.Errorf("Failed to start mempool: %w", err)
+	}
+	log.Println("Mempool manager started via API, listening for new transactions...")
+
+	// Keep exactly one cleaner goroutine even if the rebuild happens before
+	// the initial start.
+	if !s.mempoolInit {
+		s.mempoolInit = true
+		cleanerFn := s.startMempoolCleanerFn
+		if cleanerFn == nil {
+			cleanerFn = s.startMempoolCleaner
+		}
+		go cleanerFn()
+	}
+
+	// Re-ingest the node's current mempool synchronously, so the API only
+	// reports success once local state matches the node again.
+	log.Println("Starting to initialize mempool data...")
+	if s.initializeMempoolFn != nil {
+		s.initializeMempoolFn()
+	} else if err := s.mempoolMgr.InitializeMempoolSync(s.bcClient); err != nil {
+		return fmt.Errorf("Failed to initialize mempool: %w", err)
+	}
+	log.Println("Mempool data initialization complete")
+	return nil
+}
+
 // Start mempool API
 func (s *Server) startMempool(c *gin.Context) {
 	err := s.StartMempoolCore()
@@ -254,16 +309,7 @@ func (s *Server) RebuildMempool() error {
 
 // Rebuild mempool API
 func (s *Server) rebuildMempool(c *gin.Context) {
-	err := s.RebuildMempool()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
-		return
-	}
-	err = s.StartMempoolCore()
-	if err != nil {
+	if err := s.restartMempoolCore(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error":   err.Error(),
@@ -272,7 +318,7 @@ func (s *Server) rebuildMempool(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "Mempool started successfully",
+		"message": "Mempool rebuilt successfully",
 		"status":  "running",
 	})
 }
