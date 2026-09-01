@@ -25,6 +25,10 @@ type NftServer struct {
 	metaStore   *storage.MetaStore
 	stopCh      <-chan struct{}
 	mempoolInit bool // Whether mempool is initialized
+
+	rebuildMempoolFn    func() error
+	startMempoolFn      func() error
+	initializeMempoolFn func()
 }
 
 func NewNftServer(bcClient *blockchain.NftClient, indexer *indexer.ContractNftIndexer, metaStore *storage.MetaStore, stopCh <-chan struct{}) *NftServer {
@@ -210,20 +214,56 @@ func (s *NftServer) RebuildMempool() error {
 	return s.mempoolMgr.CleanAllMempool()
 }
 
-// Rebuild mempool API
-func (s *NftServer) rebuildMempool(c *gin.Context) {
-	// Check if mempool manager is configured
-	err := s.RebuildMempool()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"error":   err.Error(),
-		})
-		return
+// restartMempoolCore rebuilds the NFT mempool as a clean restart: stop the
+// old ZMQ client, wipe and rebuild the NFT mempool databases, start ZMQ
+// listening again and re-ingest the node's current mempool. Unlike
+// StartMempoolCore it does not skip when the mempool is already running, and
+// it never starts a second mempool cleaner goroutine.
+func (s *NftServer) restartMempoolCore() error {
+	if s.rebuildMempoolFn == nil && (s.mempoolMgr == nil || s.bcClient == nil) {
+		return fmt.Errorf("mempool manager or blockchain client not configured")
 	}
 
-	err = s.StartMempoolCore()
-	if err != nil {
+	rebuildFn := s.rebuildMempoolFn
+	if rebuildFn == nil {
+		rebuildFn = s.mempoolMgr.CleanAllMempool
+	}
+	if err := rebuildFn(); err != nil {
+		return fmt.Errorf("failed to rebuild mempool: %w", err)
+	}
+
+	// When the mempool never started, finish with the normal one-time
+	// startup (init, clean-height bookkeeping, cleaner goroutine).
+	if !s.mempoolInit {
+		return s.StartMempoolCore()
+	}
+
+	// Already running: restart ZMQ listening and re-ingest the node's
+	// current mempool synchronously, so the API only reports success once
+	// local state matches the node again.
+	log.Println("Starting ZMQ and NFT mempool monitoring via API...")
+	startFn := s.startMempoolFn
+	if startFn == nil {
+		startFn = s.mempoolMgr.Start
+	}
+	if err := startFn(); err != nil {
+		return fmt.Errorf("mempool startup failed: %w", err)
+	}
+	log.Println("Mempool manager started via API, monitoring new transactions...")
+
+	log.Println("Starting NFT mempool data initialization...")
+	if s.initializeMempoolFn != nil {
+		s.initializeMempoolFn()
+	} else if err := s.mempoolMgr.InitializeMempoolSync(s.bcClient); err != nil {
+		return fmt.Errorf("failed to initialize mempool: %w", err)
+	}
+	log.Println("NFT mempool data initialization completed")
+	return nil
+}
+
+// Rebuild mempool API
+func (s *NftServer) rebuildMempool(c *gin.Context) {
+	if err := s.restartMempoolCore(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error":   err.Error(),
@@ -232,7 +272,7 @@ func (s *NftServer) rebuildMempool(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "Mempool started successfully",
+		"message": "Mempool rebuilt successfully",
 		"status":  "running",
 	})
 }

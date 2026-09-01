@@ -411,12 +411,6 @@ func (m *NftMempoolManager) Stop() {
 	if m.mempoolUsedNftIncomeStore != nil {
 		m.mempoolUsedNftIncomeStore.Close()
 	}
-	if m.mempoolCodeHashGenesisNftIncomeStore != nil {
-		m.mempoolCodeHashGenesisNftIncomeStore.Close()
-	}
-	if m.mempoolCodeHashGenesisNftSpendStore != nil {
-		m.mempoolCodeHashGenesisNftSpendStore.Close()
-	}
 	if m.mempoolVerifyTxStore != nil {
 		m.mempoolVerifyTxStore.Close()
 	}
@@ -1250,89 +1244,96 @@ func (m *NftMempoolManager) CleanByHeight(height int, bcClient interface{}) erro
 func (m *NftMempoolManager) InitializeMempool(bcClient interface{}) {
 	// Use a separate goroutine to avoid blocking the main program
 	go func() {
-		log.Printf("Starting NFT mempool data initialization...")
-
-		// Assert as blockchain.NftClient
-		client, ok := bcClient.(*blockchain.NftClient)
-		if !ok {
-			log.Printf("Failed to initialize NFT mempool: unsupported blockchain client type")
-			return
+		if err := m.InitializeMempoolSync(bcClient); err != nil {
+			log.Printf("Failed to initialize NFT mempool: %v", err)
 		}
-
-		// Get all transaction IDs in the mempool
-		txids, err := client.GetRawMempool()
-		if err != nil {
-			log.Printf("Failed to get mempool transaction list: %v", err)
-			return
-		}
-
-		log.Printf("Fetched %d mempool transactions from node, start processing...", len(txids))
-
-		// Process transactions in batches, 100 per batch to avoid excessive memory usage
-		batchSize := 100
-		totalBatches := (len(txids) + batchSize - 1) / batchSize
-
-		for batchIdx := 0; batchIdx < totalBatches; batchIdx++ {
-			start := batchIdx * batchSize
-			end := start + batchSize
-			if end > len(txids) {
-				end = len(txids)
-			}
-
-			// Process current batch
-			currentBatch := txids[start:end]
-			log.Printf("Processing NFT mempool transaction batch %d/%d (%d transactions)", batchIdx+1, totalBatches, len(currentBatch))
-
-			for _, txid := range currentBatch {
-				now := time.Now().UnixMilli()
-				// Get transaction details
-				txRaw, err := client.GetRawTransactionHex(txid)
-				if err != nil {
-					fmt.Println("GetRawTransaction error", err)
-					continue
-				}
-				txRawByte, err := hex.DecodeString(txRaw)
-				if err != nil {
-					fmt.Println("DecodeString error", err)
-					continue
-				}
-				msgTx, err := DeserializeTransaction(txRawByte)
-				if err != nil {
-					fmt.Println("DeserializeTransaction error", err)
-					continue
-				}
-
-				// Process outputs first (create new UTXOs)
-				isNftTx, err := m.processNftOutputs(msgTx, now)
-				if err != nil {
-					log.Printf("Failed to process NFT transaction outputs %s: %v", txid, err)
-					continue
-				}
-				if isNftTx {
-					fmt.Printf("Mempool received NFT transaction: %s\n", txid)
-				}
-
-				// Then process inputs (mark spent UTXOs)
-				if err := m.processNftInputs(msgTx, now); err != nil {
-					log.Printf("Failed to process NFT transaction inputs %s: %v", txid, err)
-					continue
-				}
-
-				if isNftTx {
-					// Process VerifyTx
-					if err := m.processVerifyTx(msgTx); err != nil {
-						log.Printf("Failed to process VerifyTx %s: %v", txid, err)
-						continue
-					}
-				}
-			}
-
-			// After batch is processed, pause briefly to allow other programs to execute
-			time.Sleep(10 * time.Millisecond)
-		}
-
-		log.Printf("NFT mempool data initialization complete, processed %d transactions in total", len(txids))
 	}()
+}
+
+// InitializeMempoolSync fetches and processes all current NFT mempool transactions
+// from the node synchronously, so callers can verify the refresh succeeded
+func (m *NftMempoolManager) InitializeMempoolSync(bcClient interface{}) error {
+	log.Printf("Starting NFT mempool data initialization...")
+
+	// Assert as blockchain.NftClient
+	client, ok := bcClient.(*blockchain.NftClient)
+	if !ok {
+		return fmt.Errorf("failed to initialize NFT mempool: unsupported blockchain client type")
+	}
+
+	// Get all transaction IDs in the mempool
+	txids, err := client.GetRawMempool()
+	if err != nil {
+		return fmt.Errorf("failed to get mempool transaction list: %w", err)
+	}
+
+	log.Printf("Fetched %d mempool transactions from node, start processing...", len(txids))
+
+	// Process transactions in batches, 100 per batch to avoid excessive memory usage
+	batchSize := 100
+	totalBatches := (len(txids) + batchSize - 1) / batchSize
+
+	for batchIdx := 0; batchIdx < totalBatches; batchIdx++ {
+		start := batchIdx * batchSize
+		end := start + batchSize
+		if end > len(txids) {
+			end = len(txids)
+		}
+
+		// Process current batch
+		currentBatch := txids[start:end]
+		log.Printf("Processing NFT mempool transaction batch %d/%d (%d transactions)", batchIdx+1, totalBatches, len(currentBatch))
+
+		for _, txid := range currentBatch {
+			now := time.Now().UnixMilli()
+			// Get transaction details
+			txRaw, err := client.GetRawTransactionHex(txid)
+			if err != nil {
+				fmt.Println("GetRawTransaction error", err)
+				continue
+			}
+			txRawByte, err := hex.DecodeString(txRaw)
+			if err != nil {
+				fmt.Println("DecodeString error", err)
+				continue
+			}
+			msgTx, err := DeserializeTransaction(txRawByte)
+			if err != nil {
+				fmt.Println("DeserializeTransaction error", err)
+				continue
+			}
+
+			// Process outputs first (create new UTXOs)
+			isNftTx, err := m.processNftOutputs(msgTx, now)
+			if err != nil {
+				log.Printf("Failed to process NFT transaction outputs %s: %v", txid, err)
+				continue
+			}
+			if isNftTx {
+				fmt.Printf("Mempool received NFT transaction: %s\n", txid)
+			}
+
+			// Then process inputs (mark spent UTXOs)
+			if err := m.processNftInputs(msgTx, now); err != nil {
+				log.Printf("Failed to process NFT transaction inputs %s: %v", txid, err)
+				continue
+			}
+
+			if isNftTx {
+				// Process VerifyTx
+				if err := m.processVerifyTx(msgTx); err != nil {
+					log.Printf("Failed to process VerifyTx %s: %v", txid, err)
+					continue
+				}
+			}
+		}
+
+		// After batch is processed, pause briefly to allow other programs to execute
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	log.Printf("NFT mempool data initialization complete, processed %d transactions in total", len(txids))
+	return nil
 }
 
 // CleanAllMempool cleans all NFT mempool data for complete rebuild
@@ -1343,6 +1344,10 @@ func (m *NftMempoolManager) CleanAllMempool() error {
 	zmqAddress := ""
 	if m.zmqClient != nil {
 		zmqAddress = m.zmqClient.address
+		// Stop the old listener before closing the databases: in-flight
+		// handlers run on the ZMQ listener goroutine, and leaving the old
+		// client running after the rebuild would listen twice.
+		m.zmqClient.Stop()
 	}
 
 	// Get database file paths using basePath and fixed table names
