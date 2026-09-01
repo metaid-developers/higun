@@ -627,7 +627,7 @@ func (c *Client) CheckReorg(idx *indexer.UTXOIndexer) {
 		if reorgHeight > 0 {
 			log.Println("find reorg !!")
 			// Handle reorganization
-			idx.HandleReorg(int64(reorgHeight)+1, int64(endHeight))
+			idx.HandleReorg(int64(reorgHeight)+1, int64(endHeight), c)
 		}
 		time.Sleep(10 * time.Minute)
 		//time.Sleep(10 * time.Second)
@@ -716,7 +716,7 @@ func (c *Client) SyncBlocks(idx *indexer.UTXOIndexer, checkInterval time.Duratio
 		if reorgHeight > 0 {
 			log.Println("find reorg !!")
 			// Handle reorganization
-			idx.HandleReorg(int64(reorgHeight)+1, int64(lastHeight))
+			idx.HandleReorg(int64(reorgHeight)+1, int64(lastHeight), c)
 		}
 		// Sync new blocks
 		for height := lastHeight + 1; height <= currentHeight; height++ {
