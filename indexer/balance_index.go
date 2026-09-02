@@ -187,6 +187,18 @@ func (i *UTXOIndexer) isBalanceIndexReady() bool {
 	return string(data) == "1"
 }
 
+// trackedBalanceRowsMaintained reports whether tracked balance rows are kept
+// fresh: either the confirmed balance index is ready (deltas are applied per
+// block) or the per-block touched-row sync is enabled. When neither holds,
+// tracked rows go silently stale, so they must not be served from the
+// balance store.
+func (i *UTXOIndexer) trackedBalanceRowsMaintained() bool {
+	if i.isBalanceIndexReady() {
+		return true
+	}
+	return config.GlobalConfig != nil && config.GlobalConfig.SyncTouchedBalanceRows
+}
+
 func clearStore(store *storage.PebbleStore) error {
 	if store == nil {
 		return nil

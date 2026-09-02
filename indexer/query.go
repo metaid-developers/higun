@@ -39,7 +39,10 @@ func (i *UTXOIndexer) GetBalance(address string, dustThreshold int64) (balanceRe
 	}
 
 	noMempoolActivity := len(mempoolIncomeData) == 0 && len(mempoolSpendData) == 0
-	if i.balanceStore != nil && noMempoolActivity {
+	// Tracked rows are only trustworthy while something keeps them fresh
+	// (ready index or enabled touched-row sync); otherwise they silently go
+	// stale and must fall through to the history scan below.
+	if i.balanceStore != nil && noMempoolActivity && i.trackedBalanceRowsMaintained() {
 		row, rowErr := i.getAddressBalanceRow(address)
 		if rowErr == nil {
 			if i.isBalanceIndexReady() || row.Tracked {
@@ -63,7 +66,7 @@ func (i *UTXOIndexer) GetBalance(address string, dustThreshold int64) (balanceRe
 	if err != nil {
 		return
 	}
-	if i.balanceStore != nil && noMempoolActivity && !i.isBalanceIndexReady() {
+	if i.balanceStore != nil && noMempoolActivity && !i.isBalanceIndexReady() && i.trackedBalanceRowsMaintained() {
 		if cacheErr := i.putTrackedAddressBalance(address, int64(balanceResult.ConfirmedBalanceSatoshi), balanceResult.UTXOCount); cacheErr != nil {
 			log.Printf("[BalanceIndex] failed to cache confirmed balance row for %s: %v", address, cacheErr)
 		}
