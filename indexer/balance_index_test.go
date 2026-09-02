@@ -1145,3 +1145,54 @@ func TestStartBalanceIndexBootstrapIfNeededRunsAsync(t *testing.T) {
 		t.Fatal("expected bootstrap goroutine to finish")
 	}
 }
+
+func TestGetBalanceIgnoresStaleTrackedRowsWhenSyncDisabled(t *testing.T) {
+	idx := newBalanceIndexTestIndexer(t)
+	config.GlobalConfig.SyncTouchedBalanceRows = false
+
+	// A tracked row frozen at an old value while the touched-row sync is
+	// disabled must not be served; the history scan stays authoritative.
+	if err := idx.putTrackedAddressBalance("addr-stale", 1000, 1); err != nil {
+		t.Fatalf("putTrackedAddressBalance: %v", err)
+	}
+	if err := idx.addressStore.Set([]byte("addr-stale"), []byte("tx-h@0@42@1700000000")); err != nil {
+		t.Fatalf("seed income addr-stale: %v", err)
+	}
+
+	balance, err := idx.GetBalance("addr-stale", 0)
+	if err != nil {
+		t.Fatalf("GetBalance addr-stale: %v", err)
+	}
+	if balance.ConfirmedBalanceSatoshi != 42 {
+		t.Fatalf("expected confirmed balance 42 from history fallback, got %d", balance.ConfirmedBalanceSatoshi)
+	}
+	if balance.UTXOCount != 1 {
+		t.Fatalf("expected utxo count 1 from history fallback, got %d", balance.UTXOCount)
+	}
+
+	// The disabled mode must not refresh or re-cache the row either.
+	row, err := idx.getAddressBalanceRow("addr-stale")
+	if err != nil {
+		t.Fatalf("getAddressBalanceRow addr-stale: %v", err)
+	}
+	if !row.Tracked || row.BalanceSatoshi != 1000 {
+		t.Fatalf("expected the stale tracked row to be left untouched, got %+v", row)
+	}
+}
+
+func TestGetBalanceServesTrackedRowsWhenSyncEnabled(t *testing.T) {
+	idx := newBalanceIndexTestIndexer(t)
+	config.GlobalConfig.SyncTouchedBalanceRows = true
+
+	if err := idx.putTrackedAddressBalance("addr-tracked", 2000, 2); err != nil {
+		t.Fatalf("putTrackedAddressBalance: %v", err)
+	}
+
+	balance, err := idx.GetBalance("addr-tracked", 0)
+	if err != nil {
+		t.Fatalf("GetBalance addr-tracked: %v", err)
+	}
+	if balance.ConfirmedBalanceSatoshi != 2000 || balance.UTXOCount != 2 {
+		t.Fatalf("expected tracked row 2000/2 to be served, got %d/%d", balance.ConfirmedBalanceSatoshi, balance.UTXOCount)
+	}
+}
