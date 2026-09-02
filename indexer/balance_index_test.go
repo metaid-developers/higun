@@ -33,9 +33,7 @@ func (m *stubMempoolManager) BatchDeleteIncom(list []string) error { return nil 
 
 func (m *stubMempoolManager) BatchDeleteSpend(list []string) error { return nil }
 
-func (m *stubMempoolManager) DeleteMempool() error { return nil }
-
-func (m *stubMempoolManager) StartMempool() error { return nil }
+func (m *stubMempoolManager) RestartMempool(bcClient interface{}) error { return nil }
 
 type stubConfirmedUTXOValidator struct {
 	unspent         map[string]bool

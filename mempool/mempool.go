@@ -105,11 +105,18 @@ func (m *MempoolManager) GetSpendUTXOs(txPoints []string) (spendMap map[string]s
 	return
 }
 
-func (m *MempoolManager) DeleteMempool() (err error) {
-	return m.RebuildMempool()
-}
-func (m *MempoolManager) StartMempool() (err error) {
-	return m.Start()
+// RestartMempool rebuilds the mempool data, restarts ZMQ listening and
+// re-ingests the node's current mempool, so local state matches the node
+// again after events like reorgs that wipe the mempool databases
+func (m *MempoolManager) RestartMempool(bcClient interface{}) (err error) {
+	if err = m.RebuildMempool(); err != nil {
+		return err
+	}
+	if err = m.Start(); err != nil {
+		return err
+	}
+	m.InitializeMempool(bcClient)
+	return nil
 }
 
 func (m *MempoolManager) GetDataByAddress(address string) (income map[string]string, spend map[string]string) {

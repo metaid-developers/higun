@@ -100,7 +100,9 @@ func NewMempoolManager(basePath string, utxoStore *storage.PebbleStore, chainCfg
 // Start starts the mempool manager
 func (m *MempoolManager) Start() error {
 	for _, client := range m.zmqClient {
-		client.Start()
+		if err := client.Start(); err != nil {
+			return fmt.Errorf("Failed to start ZMQ client %s: %w", client.address, err)
+		}
 	}
 	return nil
 }
@@ -366,74 +368,81 @@ func (m *MempoolManager) CleanByHeight(height int, bcClient interface{}) error {
 func (m *MempoolManager) InitializeMempool(bcClient interface{}) {
 	// Use a separate goroutine to avoid blocking the main program
 	go func() {
-		log.Printf("Starting mempool data initialization...")
-
-		// Assert as blockchain.Client
-		client, ok := bcClient.(*blockchain.Client)
-		if !ok {
-			log.Printf("Failed to initialize mempool: unsupported blockchain client type")
-			return
+		if err := m.InitializeMempoolSync(bcClient); err != nil {
+			log.Printf("Failed to initialize mempool: %v", err)
 		}
-
-		// Get all transaction IDs in the mempool
-		txids, err := client.GetRawMempool()
-		if err != nil {
-			log.Printf("Failed to get mempool transaction list: %v", err)
-			return
-		}
-
-		log.Printf("Fetched %d mempool transactions from node, start processing...", len(txids))
-
-		// Process transactions in batches, 500 per batch to avoid excessive memory usage
-		batchSize := 500
-		totalBatches := (len(txids) + batchSize - 1) / batchSize
-
-		for batchIdx := 0; batchIdx < totalBatches; batchIdx++ {
-			start := batchIdx * batchSize
-			end := start + batchSize
-			if end > len(txids) {
-				end = len(txids)
-			}
-
-			// Process current batch
-			currentBatch := txids[start:end]
-			log.Printf("Processing mempool transaction batch %d/%d (%d transactions)", batchIdx+1, totalBatches, len(currentBatch))
-			timeStr := strconv.FormatInt(time.Now().Unix(), 10)
-			for _, txid := range currentBatch {
-				// Get transaction details
-				tx, err := client.GetRawTransaction(txid)
-				if err != nil {
-					log.Printf("Failed to get transaction details %s: %v", txid, err)
-					continue
-				}
-
-				// Use existing transaction processing methods
-				msgTx := tx.MsgTx()
-
-				m.mu.RLock()
-				// Process outputs first (create new UTXOs)
-				if err := m.processOutputs(msgTx, timeStr); err != nil {
-					log.Printf("Failed to process transaction outputs %s: %v", txid, err)
-					m.mu.RUnlock()
-					continue
-				}
-
-				// Then process inputs (mark spent UTXOs)
-				if err := m.processInputs(msgTx, timeStr); err != nil {
-					log.Printf("Failed to process transaction inputs %s: %v", txid, err)
-					m.mu.RUnlock()
-					continue
-				}
-				m.mu.RUnlock()
-			}
-
-			// After batch is processed, pause briefly to allow other programs to execute
-			// Avoid sustained high load
-			time.Sleep(10 * time.Millisecond)
-		}
-
-		log.Printf("Mempool data initialization complete, processed %d transactions in total", len(txids))
 	}()
+}
+
+// InitializeMempoolSync fetches and processes all current mempool transactions
+// from the node synchronously, so callers can verify the refresh succeeded
+func (m *MempoolManager) InitializeMempoolSync(bcClient interface{}) error {
+	log.Printf("Starting mempool data initialization...")
+
+	// Assert as blockchain.Client
+	client, ok := bcClient.(*blockchain.Client)
+	if !ok {
+		return fmt.Errorf("failed to initialize mempool: unsupported blockchain client type")
+	}
+
+	// Get all transaction IDs in the mempool
+	txids, err := client.GetRawMempool()
+	if err != nil {
+		return fmt.Errorf("failed to get mempool transaction list: %w", err)
+	}
+
+	log.Printf("Fetched %d mempool transactions from node, start processing...", len(txids))
+
+	// Process transactions in batches, 500 per batch to avoid excessive memory usage
+	batchSize := 500
+	totalBatches := (len(txids) + batchSize - 1) / batchSize
+
+	for batchIdx := 0; batchIdx < totalBatches; batchIdx++ {
+		start := batchIdx * batchSize
+		end := start + batchSize
+		if end > len(txids) {
+			end = len(txids)
+		}
+
+		// Process current batch
+		currentBatch := txids[start:end]
+		log.Printf("Processing mempool transaction batch %d/%d (%d transactions)", batchIdx+1, totalBatches, len(currentBatch))
+		timeStr := strconv.FormatInt(time.Now().Unix(), 10)
+		for _, txid := range currentBatch {
+			// Get transaction details
+			tx, err := client.GetRawTransaction(txid)
+			if err != nil {
+				log.Printf("Failed to get transaction details %s: %v", txid, err)
+				continue
+			}
+
+			// Use existing transaction processing methods
+			msgTx := tx.MsgTx()
+
+			m.mu.RLock()
+			// Process outputs first (create new UTXOs)
+			if err := m.processOutputs(msgTx, timeStr); err != nil {
+				log.Printf("Failed to process transaction outputs %s: %v", txid, err)
+				m.mu.RUnlock()
+				continue
+			}
+
+			// Then process inputs (mark spent UTXOs)
+			if err := m.processInputs(msgTx, timeStr); err != nil {
+				log.Printf("Failed to process transaction inputs %s: %v", txid, err)
+				m.mu.RUnlock()
+				continue
+			}
+			m.mu.RUnlock()
+		}
+
+		// After batch is processed, pause briefly to allow other programs to execute
+		// Avoid sustained high load
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	log.Printf("Mempool data initialization complete, processed %d transactions in total", len(txids))
+	return nil
 }
 
 // CleanAllMempool cleans all mempool data for complete rebuild
@@ -564,6 +573,16 @@ func (m *MempoolManager) RebuildMempool() error {
 
 	incomeDbPath := m.basePath + "/mempool_income"
 	spendDbPath := m.basePath + "/mempool_spend"
+
+	// Stop the old ZMQ clients before acquiring the write lock: an in-flight
+	// HandleRawTransaction holds mu.RLock and runs on the ZMQ listener
+	// goroutine, so calling Stop while holding mu.Lock would deadlock inside
+	// ZMQClient.Stop's wg.Wait. Stopping first also prevents the replaced
+	// clients from listening twice after the rebuild.
+	log.Println("Stopping old ZMQ clients before rebuild...")
+	for _, client := range m.zmqClient {
+		client.Stop()
+	}
 
 	// Acquire write lock to prevent concurrent reads during DB close/recreate
 	m.mu.Lock()

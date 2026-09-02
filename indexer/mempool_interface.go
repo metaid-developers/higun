@@ -18,6 +18,5 @@ type MempoolManager interface {
 	GetSpendUTXOs(txPoints []string) (spendMap map[string]struct{}, err error) // Get mempool spend UTXOs for specified transaction points
 	BatchDeleteIncom(list []string) (err error)                                // Batch delete mempool income records
 	BatchDeleteSpend(list []string) (err error)                                // Batch delete mempool spend records
-	DeleteMempool() (err error)
-	StartMempool() (err error) // Rebuild mempool data from the mempool transactions
+	RestartMempool(bcClient interface{}) (err error) // Rebuild mempool data and re-ingest the node's current mempool
 }

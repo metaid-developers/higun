@@ -150,7 +150,7 @@ func (idx *UTXOIndexer) DoDelete(block *Block) error {
 	}
 	return nil
 }
-func (idx *UTXOIndexer) HandleReorg(fromHeight, toHeight int64) error {
+func (idx *UTXOIndexer) HandleReorg(fromHeight, toHeight int64, bcClient interface{}) error {
 	IsHandleReorg = true
 	for i := fromHeight; i <= toHeight; i++ {
 		if err := idx.DeleteDataByBlockHeight(i); err != nil {
@@ -175,13 +175,9 @@ func (idx *UTXOIndexer) HandleReorg(fromHeight, toHeight int64) error {
 	}
 	//重建内存池
 	if idx.mempoolManager != nil {
-		err = idx.mempoolManager.DeleteMempool()
+		err = idx.mempoolManager.RestartMempool(bcClient)
 		if err != nil {
 			return fmt.Errorf("failed to rebuild mempool: %w", err)
-		}
-		err = idx.mempoolManager.StartMempool()
-		if err != nil {
-			return fmt.Errorf("failed to start mempool: %w", err)
 		}
 	}
 
