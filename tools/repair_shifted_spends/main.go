@@ -140,7 +140,17 @@ func main() {
 				keep = append(keep, rec)
 				continue
 			}
-			owner, ok := storage.ExtractAddressFromUtxoRow(txRow(parts[0]), vout)
+			row := txRow(parts[0])
+			if !rowHasVoutEntries(row) {
+				// Pure mempool-era row (no vout fields): its confirmed
+				// content is gone and positional matching is not
+				// trustworthy for ownership decisions.
+				unresolvable = append(unresolvable, fmt.Sprintf("%s <- %s (utxo row has no vout entries)", addr, rec))
+				taintedTxids[parts[0]] = true
+				keep = append(keep, rec)
+				continue
+			}
+			owner, ok := storage.ExtractAddressFromUtxoRow(row, vout)
 			if !ok {
 				unresolvable = append(unresolvable, fmt.Sprintf("%s <- %s (no vout entry in utxo row)", addr, rec))
 				taintedTxids[parts[0]] = true
@@ -151,6 +161,7 @@ func main() {
 				keep = append(keep, rec)
 				continue
 			}
+			taintedTxids[parts[0]] = true
 			moves = append(moves, move{from: addr, to: owner, record: rec})
 			seedAddresses[owner] = true // destination rows get balance-cleared too
 		}
@@ -256,6 +267,23 @@ func main() {
 	fmt.Println("done")
 }
 
+// rowHasVoutEntries reports whether any entry in a utxo row carries a vout
+// field ("address@amount@time@vout" has 3 '@' separators).
+func rowHasVoutEntries(row []byte) bool {
+	seps := 0
+	for _, b := range row {
+		if b == '@' {
+			seps++
+			if seps >= 3 {
+				return true
+			}
+		} else if b == ',' {
+			seps = 0
+		}
+	}
+	return false
+}
+
 func dropVoutlessEntries(row []byte) []byte {
 	start := 0
 	if len(row) > 0 && row[0] == ',' {
@@ -269,14 +297,16 @@ func dropVoutlessEntries(row []byte) []byte {
 			end++
 		}
 		seg := row[i:end]
-		if _, _, hasVout := splitEntryVout(seg); hasVout {
+		if entryHasVout(seg) {
 			kept = append(kept, seg)
 		} else {
 			changed = true
 		}
 		i = end + 1
 	}
-	if !changed {
+	// A cleaned row must never end up empty: entries without vouts are the
+	// only content some damaged rows have left.
+	if !changed || len(kept) == 0 {
 		return row
 	}
 	parts := make([]string, len(kept))
@@ -286,25 +316,16 @@ func dropVoutlessEntries(row []byte) []byte {
 	return []byte(strings.Join(parts, ","))
 }
 
-// splitEntryVout reports whether a utxo row entry carries a vout field
-// ("address@amount@time@vout") and returns its value.
-func splitEntryVout(seg []byte) (int, bool, bool) {
+// entryHasVout reports whether a utxo row entry is the indexer's 4-field
+// format "address@amount@blockTime@vout" (exactly 3 '@' separators).
+func entryHasVout(seg []byte) bool {
 	count := 0
-	last := -1
-	for i, b := range seg {
+	for _, b := range seg {
 		if b == '@' {
 			count++
-			last = i
 		}
 	}
-	if count < 4 {
-		return 0, false, false
-	}
-	v, err := strconv.Atoi(string(seg[last+1:]))
-	if err != nil {
-		return 0, false, false
-	}
-	return v, true, true
+	return count == 3
 }
 
 func sortedKeys(m map[string]bool) []string {
@@ -324,3 +345,6 @@ func sortedKeys2[T any](m map[string]T) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// local sanity tests for the row-shape helper
+// (kept beside the helper; run via `go test` in this directory)
