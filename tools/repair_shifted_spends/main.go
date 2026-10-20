@@ -234,6 +234,9 @@ func main() {
 	fmt.Printf("utxo rows rewritten: %d\n", rewritten)
 
 	for _, addr := range sortedKeys2(finalRows) {
+		if len(finalRows[addr]) == 0 {
+			continue // nothing was there and nothing moved in; don't create an empty row
+		}
 		if err := spendStore.Set([]byte(addr), finalRows[addr]); err != nil {
 			log.Fatalf("rewrite spend row %s: %v", addr, err)
 		}
