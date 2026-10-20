@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -11,6 +12,11 @@ import (
 	"github.com/metaid/utxo_indexer/config"
 	"github.com/metaid/utxo_indexer/storage"
 )
+
+// move is one spend-record relocation.
+type move struct {
+	from, to, record string
+}
 
 // repair_shifted_spends fixes spend records that a historical bug attributed
 // to the wrong address.
@@ -43,6 +49,7 @@ func main() {
 		memoryGB   = flag.Int("memory", 2, "memory GB for storage tuning")
 		apply      = flag.Bool("apply", false, "write repairs (default: scan only)")
 		clearBals  = flag.Bool("clear-balance", false, "also delete tracked address_balance rows for touched addresses")
+		movesFile  = flag.String("moves-file", "", "CSV from,to,record with explicit relocations for records the vout-aware scan cannot resolve (e.g. records stuck on rows whose confirmed content was destroyed); verified offline against the node")
 	)
 	flag.Parse()
 
@@ -107,9 +114,6 @@ func main() {
 	}
 
 	// Phase 1: scan the seed rows and plan the moves.
-	type move struct {
-		from, to, record string
-	}
 	var moves []move
 	unresolvable := []string{}
 	taintedTxids := map[string]bool{}
@@ -169,6 +173,21 @@ func main() {
 	}
 
 	// Phase 2: assemble the final content of every touched spend row.
+	if *movesFile != "" {
+		extra, err := readMovesFile(*movesFile)
+		if err != nil {
+			log.Fatalf("read moves file: %v", err)
+		}
+		for _, m := range extra {
+			moves = append(moves, m)
+			seedAddresses[m.from] = true
+			seedAddresses[m.to] = true
+			if outpoint := strings.SplitN(m.record, "@", 2)[0]; strings.Contains(outpoint, ":") {
+				taintedTxids[strings.SplitN(outpoint, ":", 2)[0]] = true
+			}
+		}
+		fmt.Printf("moves from file: %d\n", len(extra))
+	}
 	incoming := map[string][]string{}
 	for _, m := range moves {
 		incoming[m.to] = append(incoming[m.to], m.record)
@@ -326,6 +345,29 @@ func entryHasVout(seg []byte) bool {
 		}
 	}
 	return count == 3
+}
+
+// readMovesFile parses CSV lines "from,to,record" (record may contain commas?
+// no — spend records never contain commas; but trim whitespace and skip
+// blanks/comments). Records are moved verbatim, so curate them carefully.
+func readMovesFile(path string) ([]move, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var out []move
+	for i, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, ",", 3)
+		if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+			return nil, fmt.Errorf("moves file line %d: want from,to,record, got %q", i+1, line)
+		}
+		out = append(out, move{from: parts[0], to: parts[1], record: parts[2]})
+	}
+	return out, nil
 }
 
 func sortedKeys(m map[string]bool) []string {
