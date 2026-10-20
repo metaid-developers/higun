@@ -21,28 +21,39 @@
 
 ## 数据修复（a910fd4 工具）
 
-前置：先部署新二进制（防新增脏数据），再修数据。
+前置：先部署新二进制（防新增脏数据），再修数据。已在 /mnt2/sandbox（生产分片拷贝）完整演练通过：三地址 store 未花集与节点 gettxout 逐一相等。
 
 ```bash
-# 1) 停容器（工具直接打开 Pebble 目录，需独占文件锁）
+# 1) 停容器（工具直接打开 Pebble 目录，需独占文件锁）；顺便换上新二进制
 sudo docker stop higun_new
+cp -p /mvc/higun_mvc/utxo_indexer /mvc/higun_mvc/utxo_indexer.bak.20261020
+mv /mvc/higun_mvc/utxo_indexer.new /mvc/higun_mvc/utxo_indexer
 
-# 2) 演练（对 /mnt2/sandbox 的分片拷贝先跑 scan+apply，确认计划与结果）
-/tmp/repair_shifted_spends -data-dir /mnt2/sandbox -shards 4 \
-  -addresses 1LFYPB16N2h1Xrbdqjbz285ANqHWcWsLRu,1M1AYMf9GqrNGjzJpCqNDP2hvj6ywPsw1G,1Md4GKJ1KGhQs79jcTEqwLtjWoXmphbSXf,18HscT1cqwhjzyD95TjXtphzj2sQJAv1bv
-
-# 3) 生产执行：迁移错归属记录 + 清理污染行 + 清 tracked 余额行
+# 2) 迁移 vout 可解析的错归属记录（演练结果：22 条）+ 清理混合污染行 + 清 tracked 余额行
 /tmp/repair_shifted_spends -data-dir /mnt2/higun_from_8_217/data -shards 4 -apply -clear-balance \
   -addresses 1LFYPB16N2h1Xrbdqjbz285ANqHWcWsLRu,1M1AYMf9GqrNGjzJpCqNDP2hvj6ywPsw1G,1Md4GKJ1KGhQs79jcTEqwLtjWoXmphbSXf,18HscT1cqwhjzyD95TjXtphzj2sQJAv1bv
 
-# 4) 补录当年被丢弃的花费记录
-/tmp/fix_single_spend -data-dir /mnt2/higun_from_8_217/data \
+# 3) 迁移「纯行」上无法自动解析的记录（32 条，逐条经节点 getrawtransaction 核实真主后离线生成）
+/tmp/repair_shifted_spends -data-dir /mnt2/higun_from_8_217/data -shards 4 -apply -clear-balance \
+  -moves-file /mnt2/sandbox/moves.csv \
+  -addresses 1LFYPB16N2h1Xrbdqjbz285ANqHWcWsLRu,1M1AYMf9GqrNGjzJpCqNDP2hvj6ywPsw1G,1Md4GKJ1KGhQs79jcTEqwLtjWoXmphbSXf,18HscT1cqwhjzyD95TjXtphzj2sQJAv1bv
+
+# 4) 补录当年因 unresolved 被丢弃的两条花费记录（花费者均已在节点上验证）
+/tmp/fix_single_spend -data-dir /mnt2/higun_from_8_217/data -shards 4 \
   -address 1LFYPB16N2h1Xrbdqjbz285ANqHWcWsLRu \
   -record 88c9e08537dbee0a0c124a19ba1f78f722d73d3120f73ecb9bc1fb1d48bb1536:950@1780901841@f9509728f167d2c65c82afba3254c91fdf7b5ca72c8644a33ea0b22a5d5a3a37
+/tmp/fix_single_spend -data-dir /mnt2/higun_from_8_217/data -shards 4 \
+  -address 18HscT1cqwhjzyD95TjXtphzj2sQJAv1bv \
+  -record 96784892d608d53bbaf8efde1ab079581969069efa52e0af891cbe9208573536:2000@1784312966@8b3e3e6e925ac620b83f85fe87e8a4c6ea7666dff89c6f0100d85af305bc57fe
 
 # 5) 起容器并验收
 sudo docker start higun_new
 ```
+
+补充说明：
+
+- 1Md4GK 的 5 个 20M chunk 未做补录：它们被一笔仍在节点 mempool 中的交易 9a4c6311… 消费（gettxout 含 mempool 视图为 null）。确认前它们仍是合法的 confirmed 未花；/balance(5) 与 /utxos(1，含 mempool 视角) 并行正确。交易上链后 /utxos 稳定为 1。
+- 工具对「纯 mempool 行」（无 vout 字段，确认内容已被历史覆盖写破坏）一律不解析、不迁移，只报告；这类行的最终修复需要 /blocks/reindex 级别的重建，不影响本验收。
 
 ## 验收
 
