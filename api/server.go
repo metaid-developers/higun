@@ -667,16 +667,9 @@ func (s *Server) checkUtxo(c *gin.Context) {
 		}
 		idx, _ := strconv.Atoi(arr[1])
 		if v, ok := addressMap[arr[0]]; ok {
-			// utxoStore format: address@value@timestamp,address@value@timestamp
-			// Note: data may start with comma, need to remove it first
-			dataStr := strings.TrimPrefix(v, ",")
-			ls := strings.Split(dataStr, ",")
-			if len(ls) <= idx {
-				continue
-			}
-			a := strings.Split(ls[idx], "@")
-			if len(a) > 0 {
-				tmpMap[a[0]] = struct{}{}
+			// Row entries may carry explicit vouts; resolve by vout when present.
+			if address, ok := storage.ExtractAddressFromUtxoRow([]byte(v), idx); ok && address != "" {
+				tmpMap[address] = struct{}{}
 			}
 		}
 	}

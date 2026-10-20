@@ -176,10 +176,16 @@ func (m *MempoolManager) processOutputs(tx *wire.MsgTx, timeStr string) error {
 		//address@amount@timestamp
 		utxoData = append(utxoData, common.ConcatBytesOptimized([]string{address, value, timeStr}, "@"))
 	}
-	// Store to utxoStore
-	m.utxoStore.Set([]byte(txHash), []byte(strings.Join(utxoData, ",")))
+	// Store to utxoStore under a mempool-private key. Confirmed rows are
+	// owned by the indexer; writing them from the ZMQ side used to shadow or
+	// shift entries and misattribute later spends (2026-10 incident).
+	m.utxoStore.Set([]byte(mempoolTxRowPrefix+txHash), []byte(strings.Join(utxoData, ",")))
 	return nil
 }
+
+// mempoolTxRowPrefix namespaces mempool-written utxo rows so they can never
+// collide with the indexer's confirmed rows for the same txid.
+const mempoolTxRowPrefix = "mem:"
 
 // processInputs processes transaction inputs, marks spent UTXOs
 func (m *MempoolManager) processInputs(tx *wire.MsgTx, timeStr string) error {
@@ -213,16 +219,15 @@ func (m *MempoolManager) processInputs(tx *wire.MsgTx, timeStr string) error {
 func (m *MempoolManager) GetUtxoAddress(txHash string, index uint32) (string, error) {
 	utxostr, err := m.utxoStore.Get([]byte(txHash))
 	if err != nil {
-		return "", err
+		utxostr, err = m.utxoStore.Get([]byte(mempoolTxRowPrefix + txHash))
+		if err != nil {
+			return "", err
+		}
 	}
-	// Remove leading comma if present
-	str := strings.TrimPrefix(string(utxostr), ",")
-	utxos := strings.Split(str, ",")
-
-	if len(utxos) <= int(index) {
+	address, ok := storage.ExtractAddressFromUtxoRow(utxostr, int(index))
+	if !ok {
 		return "", fmt.Errorf("No UTXOs found for transaction %s", txHash)
 	}
-	address := strings.Split(utxos[index], "@")[0]
 	return address, nil
 }
 

@@ -636,7 +636,11 @@ func (i *UTXOIndexer) indexIncome(block *Block, allBlock *Block, blockTimeStr st
 				return 0, 0, err
 			}
 		}
-		if err = i.utxoStore.BulkMergeMapConcurrent(&txMap, workers); err != nil {
+		// The utxoStore row of a txid is a complete snapshot of that tx's
+		// outputs, so replace it wholesale: merging onto a stale or
+		// mempool-contaminated row shifts positional entries and historically
+		// misattributed spends (2026-10 incident).
+		if err = i.utxoStore.BulkSetMapConcurrent(&txMap, workers); err != nil {
 			errMsg := syslogs.ErrLog{
 				Height:       block.Height,
 				BlockHash:    block.BlockHash,

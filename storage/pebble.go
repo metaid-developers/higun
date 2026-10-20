@@ -1256,6 +1256,17 @@ func (s *PebbleStore) DeleteMapKeys(data *map[string][]string) error {
 
 // BulkMergeMapConcurrent performs concurrent bulk merge operations on the PebbleStore
 func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurrency int) error {
+	return s.bulkWriteMapConcurrent(data, concurrency, true)
+}
+
+// BulkSetMapConcurrent replaces whole values instead of appending, for stores
+// whose rows are complete snapshots (e.g. one utxoStore row per txid) so that
+// re-applying the same data stays idempotent instead of duplicating entries.
+func (s *PebbleStore) BulkSetMapConcurrent(data *map[string][]string, concurrency int) error {
+	return s.bulkWriteMapConcurrent(data, concurrency, false)
+}
+
+func (s *PebbleStore) bulkWriteMapConcurrent(data *map[string][]string, concurrency int, merge bool) error {
 	if data == nil || len(*data) == 0 {
 		return nil
 	}
@@ -1326,10 +1337,16 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 						break LOOP
 					}
 
-					if err := batch.Merge([]byte(job.key), job.value, pebble.NoSync); err != nil {
+					var writeErr error
+					if merge {
+						writeErr = batch.Merge([]byte(job.key), job.value, pebble.NoSync)
+					} else {
+						writeErr = batch.Set([]byte(job.key), job.value, pebble.NoSync)
+					}
+					if writeErr != nil {
 						//log.Printf("[Shard %d] merge error for key %s: %v", shardIdx, job.key, err)
 						select {
-						case errCh <- fmt.Errorf("shard %d merge failed: %w", shardIdx, err):
+						case errCh <- fmt.Errorf("shard %d merge failed: %w", shardIdx, writeErr):
 						case <-ctx.Done():
 						}
 						cancel()
@@ -2078,28 +2095,11 @@ func extractAddressFromValue(value []byte, indexStr string) string {
 	if err != nil {
 		return ""
 	}
-
-	start := 0
-	// Handle potential leading comma
-	if len(value) > 0 && value[0] == ',' {
-		start = 1
+	entry, ok := resolveUtxoRowEntry(value, index)
+	if !ok {
+		return ""
 	}
-
-	current := 0
-	for i := start; i < len(value); i++ {
-		if value[i] == ',' {
-			if current == index {
-				return parseAddress(value[start:i])
-			}
-			current++
-			start = i + 1
-		}
-	}
-
-	if current == index {
-		return parseAddress(value[start:])
-	}
-	return ""
+	return entry.address
 }
 
 func extractUTXODetailFromValue(value []byte, indexStr string) (UTXODetail, bool) {
@@ -2107,107 +2107,136 @@ func extractUTXODetailFromValue(value []byte, indexStr string) (UTXODetail, bool
 	if err != nil {
 		return UTXODetail{}, false
 	}
+	entry, ok := resolveUtxoRowEntry(value, index)
+	if !ok {
+		return UTXODetail{}, false
+	}
+	return UTXODetail{Address: entry.address, Amount: entry.amount}, true
+}
 
+// utxoRowEntry is one comma-separated segment of a utxoStore row value.
+// Indexer-written (confirmed) entries carry an explicit vout:
+// "address@amount@blockTime@vout". Mempool-era entries have no vout field:
+// "address@amount@timestamp".
+type utxoRowEntry struct {
+	address string
+	amount  int64
+	vout    int // -1 when the entry carries no vout field
+}
+
+func parseUtxoRowEntry(seg []byte) (utxoRowEntry, bool) {
+	firstAt := bytes.IndexByte(seg, '@')
+	if firstAt <= 0 {
+		return utxoRowEntry{}, false
+	}
+	rest := seg[firstAt+1:]
+	secondAt := bytes.IndexByte(rest, '@')
+	if secondAt < 0 {
+		return utxoRowEntry{}, false
+	}
+	amount, err := strconv.ParseInt(string(rest[:secondAt]), 10, 64)
+	if err != nil {
+		return utxoRowEntry{}, false
+	}
+	entry := utxoRowEntry{address: string(seg[:firstAt]), amount: amount, vout: -1}
+	tail := rest[secondAt+1:]
+	thirdAt := bytes.IndexByte(tail, '@')
+	if thirdAt >= 0 {
+		if v, err := strconv.Atoi(string(tail[thirdAt+1:])); err == nil {
+			entry.vout = v
+		}
+	}
+	return entry, true
+}
+
+// resolveUtxoRowEntry finds the entry for outpoint index in a utxoStore row.
+// Rows may mix confirmed entries carrying explicit vouts with legacy
+// mempool-era entries that do not (historical contamination shifted entries
+// and misattributed spends). When any entry carries a vout, matching is done
+// by vout; only rows without any vout field (pure mempool rows) fall back to
+// positional matching, which is valid there because entries are vout-ordered.
+func resolveUtxoRowEntry(value []byte, index int) (utxoRowEntry, bool) {
+	if index < 0 {
+		return utxoRowEntry{}, false
+	}
 	start := 0
 	if len(value) > 0 && value[0] == ',' {
 		start = 1
 	}
-
-	current := 0
-	for i := start; i < len(value); i++ {
-		if value[i] == ',' {
+	hasVout := false
+	count := 0
+	var match utxoRowEntry
+	found := false
+	for i := start; i < len(value); {
+		end := bytes.IndexByte(value[i:], ',')
+		var seg []byte
+		if end < 0 {
+			seg = value[i:]
+			i = len(value)
+		} else {
+			seg = value[i : i+end]
+			i += end + 1
+		}
+		entry, ok := parseUtxoRowEntry(seg)
+		if !ok {
+			continue
+		}
+		if entry.vout >= 0 {
+			hasVout = true
+			if !found && entry.vout == index {
+				match, found = entry, true
+			}
+		}
+		count++
+	}
+	if hasVout {
+		return match, found
+	}
+	if index < count {
+		current := 0
+		for i := start; i < len(value); {
+			end := bytes.IndexByte(value[i:], ',')
+			var seg []byte
+			if end < 0 {
+				seg = value[i:]
+				i = len(value)
+			} else {
+				seg = value[i : i+end]
+				i += end + 1
+			}
 			if current == index {
-				return parseUTXODetail(value[start:i])
+				return parseUtxoRowEntry(seg)
 			}
 			current++
-			start = i + 1
 		}
 	}
-
-	if current == index {
-		return parseUTXODetail(value[start:])
-	}
-	return UTXODetail{}, false
+	return utxoRowEntry{}, false
 }
 
-func parseUTXODetail(segment []byte) (UTXODetail, bool) {
-	firstAt := bytes.IndexByte(segment, '@')
-	if firstAt <= 0 {
-		return UTXODetail{}, false
+// ExtractAddressFromUtxoRow resolves the owner address of outpoint index in a
+// raw utxoStore row value, matching explicit vout fields when present.
+func ExtractAddressFromUtxoRow(value []byte, index int) (string, bool) {
+	entry, ok := resolveUtxoRowEntry(value, index)
+	if !ok {
+		return "", false
 	}
-
-	secondAt := bytes.IndexByte(segment[firstAt+1:], '@')
-	if secondAt < 0 {
-		return UTXODetail{}, false
-	}
-
-	amountStart := firstAt + 1
-	amountEnd := amountStart + secondAt
-	amount, err := strconv.ParseInt(string(segment[amountStart:amountEnd]), 10, 64)
-	if err != nil {
-		return UTXODetail{}, false
-	}
-
-	return UTXODetail{
-		Address: string(segment[:firstAt]),
-		Amount:  amount,
-	}, true
-}
-
-func parseAddress(segment []byte) string {
-	for i, b := range segment {
-		if b == '@' {
-			return string(segment[:i])
-		}
-	}
-	return ""
+	return entry.address, true
 }
 
 func getAddressByStrSafe(key string, valueBytes []byte, colonIdx int) (string, error) {
 	if colonIdx == -1 || colonIdx >= len(key)-1 {
 		return "errAddress", fmt.Errorf("invalid key format: %s", key)
 	}
-	//str := strings.TrimPrefix(string(utxostr), ",")
 	indexStr := key[colonIdx+1:]
 	txIndex, err := strconv.Atoi(indexStr)
 	if err != nil {
 		return "errAddress", fmt.Errorf("invalid index: %s", indexStr)
 	}
-
-	// 转换为字符串（但比原版本少了一次完整拷贝）
-	valueStr := string(valueBytes)
-
-	// 手动查找目标段，避免完整 Split
-	commaCount := 0
-	start := 0
-	targetIndex := txIndex + 1
-
-	for i, ch := range valueStr {
-		if ch == ',' {
-			if commaCount == targetIndex {
-				segment := valueStr[start:i]
-				atIdx := strings.Index(segment, "@")
-				if atIdx == -1 {
-					return "errAddress", fmt.Errorf("invalid address format")
-				}
-				return segment[:atIdx], nil
-			}
-			commaCount++
-			start = i + 1
-		}
+	address, ok := resolveUtxoRowEntry(valueBytes, txIndex)
+	if !ok {
+		return "errAddress", fmt.Errorf("invalid address index: %d", txIndex)
 	}
-
-	// 处理最后一段
-	if commaCount == targetIndex && start < len(valueStr) {
-		segment := valueStr[start:]
-		atIdx := strings.Index(segment, "@")
-		if atIdx == -1 {
-			return "errAddress", fmt.Errorf("invalid address format")
-		}
-		return segment[:atIdx], nil
-	}
-
-	return "errAddress", fmt.Errorf("invalid address index: %d", txIndex)
+	return address.address, nil
 }
 
 // QueryUTXOAddresses optimized version - only necessary modifications
